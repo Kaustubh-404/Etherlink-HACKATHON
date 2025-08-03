@@ -1,38 +1,50 @@
+// components/multiplayer-context-provider.tsx - Phase 3: Contract Integration
 "use client"
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
 import { type Character } from "./game-state-provider"
 import { socketService, type RoomData } from "@/lib/socket-service"
 import { playSound } from "@/lib/sound-utils"
-
-// Define specific event data types
-interface PlayerUpdateData {
-  playerId: string;
-  playerName: string;
-  character?: Character;
-  isReady?: boolean;
-}
+import { useContract } from "@/hooks/use-contract"
+import { useAccount } from "wagmi"
+import { Web3Utils } from "@/lib/Web3-Utils"
 
 type MultiplayerContextType = {
+  // Connection State
   isConnected: boolean
   isConnecting: boolean
   connectionError: string | null
+  
+  // Player State
   isHost: boolean
   playerId: string
   playerName: string
+  
+  // Room State
   currentRoom: RoomData | null
   availableRooms: RoomData[]
+  
+  // Contract Integration
+  contractMatchId: number | null
+  stakeAmount: string
+  
+  // Actions
   setPlayerName: (name: string) => void
   connect: () => Promise<void>
   disconnect: () => void
-  createRoom: (name?: string, isPrivate?: boolean) => void
-  joinRoom: (roomId: string) => void
+  createRoom: (name?: string, isPrivate?: boolean, stakeAmount?: string) => void
+  joinRoom: (roomId: string) => void  
   leaveRoom: () => void
   selectCharacter: (character: Character) => void
   setReady: (isReady?: boolean) => void
   updateOpponentHealth: (health: number) => void
   endBattle: (winnerId: string) => void
   startBattle: () => void
+  
+  // Contract Battle Actions
+  initiateContractMatch: (characterInstanceId: number, stake: string) => Promise<number>
+  joinContractMatch: (matchId: number, characterInstanceId: number, stake: string) => Promise<void>
+  makeContractMove: (matchId: number, abilityIndex: number) => Promise<void>
 }
 
 const MultiplayerContext = createContext<MultiplayerContextType | undefined>(undefined)
@@ -46,6 +58,15 @@ export const useMultiplayer = () => {
 }
 
 export function MultiplayerProvider({ children }: { children: ReactNode }) {
+  const { address } = useAccount()
+  const { 
+    initiateMatch, 
+    joinMatch, 
+    makeMove, 
+    getMatch,
+    isConnected: contractConnected 
+  } = useContract()
+
   // Socket and connection state
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
@@ -65,7 +86,11 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   const [currentRoom, setCurrentRoom] = useState<RoomData | null>(null)
   const [availableRooms, setAvailableRooms] = useState<RoomData[]>([])
   
-  // Save player name to localStorage when it changes
+  // Contract integration state
+  const [contractMatchId, setContractMatchId] = useState<number | null>(null)
+  const [stakeAmount, setStakeAmount] = useState<string>("0.01") // Default stake amount
+  
+  // Save player name to localStorage
   useEffect(() => {
     if (typeof window !== 'undefined') {
       localStorage.setItem("chronoClash_playerName", playerName)
@@ -74,113 +99,173 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   
   // Setup socket event listeners
   const setupSocketListeners = useCallback(() => {
-    // Remove any existing listeners to avoid duplicates
-    socketService.off('room_created');
-    socketService.off('create_room_error');
-    socketService.off('room_joined');
-    socketService.off('join_room_error');
-    socketService.off('player_joined');
-    socketService.off('player_left');
-    socketService.off('room_updated');
-    socketService.off('room_available');
-    socketService.off('room_unavailable');
-    socketService.off('character_selected');
-    socketService.off('player_ready_updated');
-    socketService.off('game_countdown');
-    socketService.off('game_started');
-    socketService.off('game_action_performed');
-    socketService.off('game_over');
+    // Clear existing listeners
+    socketService.off('room_created')
+    socketService.off('create_room_error')
+    socketService.off('room_joined')
+    socketService.off('join_room_error')
+    socketService.off('player_joined')
+    socketService.off('player_left')
+    socketService.off('room_updated')
+    socketService.off('room_available')
+    socketService.off('room_unavailable')
+    socketService.off('character_selected')
+    socketService.off('player_ready_updated')
+    socketService.off('game_countdown')
+    socketService.off('game_started')
+    socketService.off('game_action_performed')
+    socketService.off('game_over')
+    socketService.off('contract_match_created')
+    socketService.off('contract_match_joined')
+    socketService.off('contract_move_made')
     
     // Room creation events
     socketService.on('room_created', (data: any) => {
-      console.log("Room created event received:", data);
-      const room = data.room;
+      console.log("Room created event received:", data)
+      const room = data.room
       
       if (!room) {
-        console.error("Received room_created event with no room data");
-        // Dispatch error event
+        console.error("Received room_created event with no room data")
         const errorEvent = new CustomEvent('create_room_error', { 
           detail: { error: "Invalid room data received from server" } 
-        });
-        window.dispatchEvent(errorEvent);
-        return;
+        })
+        window.dispatchEvent(errorEvent)
+        return
       }
       
-      // Process and store the room data
-      setCurrentRoom(room);
-      setIsHost(true);
+      // Set contract match ID if provided
+      if (data.contractMatchId) {
+        setContractMatchId(data.contractMatchId)
+        room.contractMatchId = data.contractMatchId
+      }
       
-      // Dispatch custom event for other components to handle
-      const event = new CustomEvent('room_created', { detail: data });
-      window.dispatchEvent(event);
+      setCurrentRoom(room)
+      setIsHost(true)
       
-      // Play sound effect
-      playSound('room-created.mp3');
-    });
+      const event = new CustomEvent('room_created', { detail: data })
+      window.dispatchEvent(event)
+      playSound('room-created.mp3')
+    })
     
     socketService.on('create_room_error', (data: any) => {
-      console.error('Failed to create room:', data.error);
-      
-      // Dispatch custom event for components to handle
-      const event = new CustomEvent('create_room_error', { detail: data });
-      window.dispatchEvent(event);
-    });
+      console.error('Failed to create room:', data.error)
+      const event = new CustomEvent('create_room_error', { detail: data })
+      window.dispatchEvent(event)
+    })
     
     // Room joining events
     socketService.on('room_joined', (data: any) => {
-      console.log("Room joined event received:", data);
-      const room = data.room;
+      console.log("Room joined event received:", data)
+      const room = data.room
       
       if (!room) {
-        console.error("Received room_joined event with no room data");
-        // Dispatch error event
+        console.error("Received room_joined event with no room data")
         const errorEvent = new CustomEvent('join_room_error', { 
           detail: { error: "Invalid room data received from server" } 
-        });
-        window.dispatchEvent(errorEvent);
-        return;
+        })
+        window.dispatchEvent(errorEvent)
+        return
       }
       
-      // Process and store the room data
-      setCurrentRoom(room);
-      setIsHost(room.hostId === playerId);
+      // Set contract match ID if provided
+      if (data.contractMatchId) {
+        setContractMatchId(data.contractMatchId)
+        room.contractMatchId = data.contractMatchId
+      }
       
-      // Dispatch custom event for other components to handle
-      const event = new CustomEvent('room_joined', { detail: data });
-      window.dispatchEvent(event);
+      setCurrentRoom(room)
+      setIsHost(room.hostId === playerId)
       
-      // Play sound effect
-      playSound('room-joined.mp3');
-    });
+      const event = new CustomEvent('room_joined', { detail: data })
+      window.dispatchEvent(event)
+      playSound('room-joined.mp3')
+    })
     
     socketService.on('join_room_error', (data: any) => {
-      console.error('Failed to join room:', data.error);
+      console.error('Failed to join room:', data.error)
+      const event = new CustomEvent('join_room_error', { detail: data })
+      window.dispatchEvent(event)
+    })
+    
+    // Contract-specific events
+    socketService.on('contract_match_created', (data: any) => {
+      console.log('Contract match created:', data)
+      setContractMatchId(data.matchId)
       
-      // Dispatch custom event for components to handle
-      const event = new CustomEvent('join_room_error', { detail: data });
-      window.dispatchEvent(event);
-    });
+      if (currentRoom) {
+        setCurrentRoom({
+          ...currentRoom,
+          contractMatchId: data.matchId,
+          stakeAmount: data.stakeAmount
+        })
+      }
+    })
+    
+    socketService.on('contract_match_joined', (data: any) => {
+      console.log('Contract match joined:', data)
+      
+      if (currentRoom) {
+        setCurrentRoom({
+          ...currentRoom,
+          status: 'playing',
+          gameData: {
+            ...currentRoom.gameData,
+            currentTurn: data.currentTurn,
+            turnCount: 1,
+            startTime: Date.now(),
+            battleLog: ['Contract battle started!']
+          }
+        })
+      }
+    })
+    
+    socketService.on('contract_move_made', (data: any) => {
+      console.log('Contract move made:', data)
+      
+      if (currentRoom) {
+        setCurrentRoom({
+          ...currentRoom,
+          gameData: {
+            ...currentRoom.gameData,
+            currentTurn: data.currentTurn,
+            turnCount: data.turnCount,
+            battleLog: [
+              ...currentRoom.gameData?.battleLog || [],
+              `${data.playerName} made a move with ${data.abilityName}`
+            ]
+          }
+        })
+      }
+      
+      // Dispatch event for battle components
+      const event = new CustomEvent('contract_move_performed', { 
+        detail: {
+          playerId: data.playerId,
+          abilityIndex: data.abilityIndex,
+          damage: data.damage,
+          newHealth: data.newHealth
+        }
+      })
+      window.dispatchEvent(event)
+    })
     
     // Player events
-    socketService.on('player_joined', (data: PlayerUpdateData) => {
-      console.log('Player joined:', data);
+    socketService.on('player_joined', (data: any) => {
+      console.log('Player joined:', data)
       
-      // Update current room if we're in it
       setCurrentRoom(prev => {
-        if (!prev) return null;
+        if (!prev) return null
         
-        // Add player to the room's players list if not already there
         const updatedPlayers = prev.players.includes(data.playerId)
           ? prev.players
-          : [...prev.players, data.playerId];
+          : [...prev.players, data.playerId]
         
-        // Update guest info if this is a new guest
-        let updatedGuestId = prev.guestId;
-        let updatedGuestName = prev.guestName;
+        let updatedGuestId = prev.guestId
+        let updatedGuestName = prev.guestName
         
         if (!prev.guestId && data.playerId !== prev.hostId) {
-          updatedGuestId = data.playerId;
-          updatedGuestName = data.playerName;
+          updatedGuestId = data.playerId
+          updatedGuestName = data.playerName
         }
         
         return {
@@ -188,234 +273,105 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
           players: updatedPlayers,
           guestId: updatedGuestId,
           guestName: updatedGuestName
-        };
-      });
+        }
+      })
       
-      // Play sound effect
-      playSound('player-joined.mp3');
-    });
+      playSound('player-joined.mp3')
+    })
     
-    socketService.on('player_left', (data: PlayerUpdateData) => {
-      console.log('Player left:', data);
+    socketService.on('player_left', (data: any) => {
+      console.log('Player left:', data)
       
-      // Update current room if we're in it
       setCurrentRoom(prev => {
-        if (!prev) return null;
+        if (!prev) return null
         
-        // Remove player from the room's players list
-        const updatedPlayers = prev.players.filter(id => id !== data.playerId);
+        const updatedPlayers = prev.players.filter(id => id !== data.playerId)
         
-        // Clear guest info if the guest left
-        let updatedGuestId = prev.guestId;
-        let updatedGuestName = prev.guestName;
-        let updatedGuestCharacter = prev.guestCharacter;
+        let updatedGuestId = prev.guestId
+        let updatedGuestName = prev.guestName
+        let updatedGuestCharacter = prev.guestCharacter
         
         if (prev.guestId === data.playerId) {
-          updatedGuestId = null;
-          updatedGuestName = undefined;
-          updatedGuestCharacter = undefined;
-        }
-        
-        // If we're the only one left, become the host
-        let updatedHostId = prev.hostId;
-        let updatedHostName = prev.hostName;
-        let updatedHostCharacter = prev.hostCharacter;
-        
-        if (prev.hostId === data.playerId && updatedPlayers.length > 0) {
-          updatedHostId = updatedPlayers[0];
-          updatedHostName = updatedPlayers[0] === playerId ? playerName : "Opponent";
-          updatedHostCharacter = updatedPlayers[0] === playerId ? prev.guestCharacter : prev.hostCharacter;
-          
-          // If we became host, we're no longer guest
-          if (updatedPlayers[0] === playerId) {
-            updatedGuestId = null;
-            updatedGuestName = undefined;
-            updatedGuestCharacter = undefined;
-            setIsHost(true);
-          }
+          updatedGuestId = null
+          updatedGuestName = undefined
+          updatedGuestCharacter = undefined
         }
         
         return {
           ...prev,
           players: updatedPlayers,
-          hostId: updatedHostId,
-          hostName: updatedHostName,
-          hostCharacter: updatedHostCharacter,
           guestId: updatedGuestId,
           guestName: updatedGuestName,
           guestCharacter: updatedGuestCharacter
-        };
-      });
-      
-      // Play sound effect
-      playSound('player-left.mp3');
-    });
-    
-    // Room updates
-    socketService.on('room_updated', (data: any) => {
-      console.log('Room updated:', data);
-      
-      if (!data.room) {
-        console.error("Received room_updated event with no room data");
-        return;
-      }
-      
-      // Update current room if it's our room
-      if (currentRoom && data.room.id === currentRoom.id) {
-        setCurrentRoom(data.room);
-      }
-    });
-    
-    // Available rooms updates
-    socketService.on('room_available', (data: RoomData) => {
-      console.log('Room available:', data);
-      
-      setAvailableRooms(prev => {
-        // Check if room is already in the list
-        const roomIndex = prev.findIndex(room => room.id === data.id);
-        
-        if (roomIndex >= 0) {
-          // Update existing room
-          const updatedRooms = [...prev];
-          updatedRooms[roomIndex] = data;
-          return updatedRooms;
-        } else {
-          // Add new room
-          return [...prev, data];
         }
-      });
-    });
-    
-    socketService.on('room_unavailable', (data: { roomId: string }) => {
-      console.log('Room unavailable:', data);
+      })
       
-      setAvailableRooms(prev => 
-        prev.filter(room => room.id !== data.roomId)
-      );
-    });
+      playSound('player-left.mp3')
+    })
     
     // Character selection
-    socketService.on('character_selected', (data: PlayerUpdateData) => {
-      console.log('Character selected:', data);
+    socketService.on('character_selected', (data: any) => {
+      console.log('Character selected:', data)
       
       if (!data.character) {
-        console.error("Received character_selected event with no character data");
-        return;
+        console.error("Received character_selected event with no character data")
+        return
       }
       
-      // Update current room with character info
       setCurrentRoom(prev => {
-        if (!prev) return null;
+        if (!prev) return null
         
         if (data.playerId === prev.hostId) {
-          return { ...prev, hostCharacter: data.character };
+          return { ...prev, hostCharacter: data.character }
         } else if (data.playerId === prev.guestId) {
-          return { ...prev, guestCharacter: data.character };
+          return { ...prev, guestCharacter: data.character }
         }
         
-        return prev;
-      });
+        return prev
+      })
       
-      // Play sound effect
-      playSound('character-select.mp3');
-    });
+      playSound('character-select.mp3')
+    })
     
-    // Player ready status
-    socketService.on('player_ready_updated', (data: PlayerUpdateData) => {
-      console.log('Player ready updated:', data);
+    // Ready status
+    socketService.on('player_ready_updated', (data: any) => {
+      console.log('Player ready updated:', data)
       
-      // Play sound effect if player is ready
       if (data.isReady) {
-        playSound('player-ready.mp3');
+        playSound('player-ready.mp3')
       }
       
-      // Dispatch custom event for other components to handle
-      const event = new CustomEvent('player_ready_updated', { detail: data });
-      window.dispatchEvent(event);
-    });
+      const event = new CustomEvent('player_ready_updated', { detail: data })
+      window.dispatchEvent(event)
+    })
     
     // Game events
     socketService.on('game_countdown', (data: { countdown: number }) => {
-      console.log('Game countdown:', data);
+      console.log('Game countdown:', data)
+      playSound('countdown.mp3')
       
-      // Play countdown sound
-      playSound('countdown.mp3');
-      
-      // Dispatch custom event for other components to handle
-      const event = new CustomEvent('game_countdown', { detail: data });
-      window.dispatchEvent(event);
-    });
+      const event = new CustomEvent('game_countdown', { detail: data })
+      window.dispatchEvent(event)
+    })
     
-    socketService.on('game_started', (data: { room: RoomData, gameData: any }) => {
-      console.log('Game started:', data);
+    socketService.on('game_started', (data: any) => {
+      console.log('Game started:', data)
       
-      // Update current room with game data
       if (currentRoom && data.room.id === currentRoom.id) {
-        setCurrentRoom(data.room);
+        setCurrentRoom(data.room)
       }
       
-      // Play game start sound
-      playSound('battle-start.mp3');
+      playSound('battle-start.mp3')
       
-      // Dispatch custom event for other components to handle
-      const event = new CustomEvent('game_started', { detail: data });
-      window.dispatchEvent(event);
-    });
-    
-    socketService.on('game_action_performed', (data: any) => {
-      console.log('Game action performed:', data);
-      
-      // Update current room with latest game state
-      if (currentRoom && data.gameData) {
-        setCurrentRoom(prev => {
-          if (!prev) return null;
-          
-          return {
-            ...prev,
-            gameData: {
-              ...prev.gameData,
-              turnCount: data.gameData.turnCount,
-              currentTurn: data.gameData.currentTurn,
-              battleLog: [
-                ...prev.gameData.battleLog,
-                ...(data.gameData.battleLog || [])
-              ].slice(-20) // Keep last 20 log entries
-            }
-          };
-        });
-      }
-      
-      // Play appropriate ability sound based on the action
-      if (data.action?.type === 'ability' && data.result?.ability?.type) {
-        const abilityType = data.result.ability.type;
-        let soundFile = 'ability.mp3';
-        
-        switch (abilityType) {
-          case 'time':
-            soundFile = 'time-ability.mp3';
-            break;
-          case 'fire':
-            soundFile = 'fire-ability.mp3';
-            break;
-          case 'lightning':
-            soundFile = 'lightning-ability.mp3';
-            break;
-        }
-        
-        playSound(soundFile);
-      }
-      
-      // Dispatch custom event for other components to handle
-      const event = new CustomEvent('game_action_performed', { detail: data });
-      window.dispatchEvent(event);
-    });
+      const event = new CustomEvent('game_started', { detail: data })
+      window.dispatchEvent(event)
+    })
     
     socketService.on('game_over', (data: { winnerId: string, winnerName: string }) => {
-      console.log('Game over:', data);
+      console.log('Game over:', data)
       
-      // Update current room with game over state
       setCurrentRoom(prev => {
-        if (!prev) return null;
+        if (!prev) return null
         
         return {
           ...prev,
@@ -425,240 +381,319 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
             winner: data.winnerId,
             endTime: Date.now(),
             battleLog: [
-              ...prev.gameData.battleLog,
+              ...prev.gameData?.battleLog || [],
               `${data.winnerName} wins the battle!`
             ]
           }
-        };
-      });
+        }
+      })
       
-      // Play victory or defeat sound
       if (data.winnerId === playerId) {
-        playSound('victory.mp3');
+        playSound('victory.mp3')
       } else {
-        playSound('defeat.mp3');
+        playSound('defeat.mp3')
       }
-    });
-  }, [currentRoom, playerName, playerId]);
+    })
+  }, [currentRoom, playerName, playerId])
   
   // Connect to socket server
   const connect = useCallback(async () => {
     try {
-      // Don't try to connect if already connecting
       if (isConnecting) {
-        console.log('Already attempting to connect, skipping duplicate call');
-        return;
+        console.log('Already attempting to connect, skipping duplicate call')
+        return
       }
       
-      setIsConnecting(true);
-      setConnectionError(null);
+      setIsConnecting(true)
+      setConnectionError(null)
       
       if (socketService.isConnected()) {
-        console.log('Already connected to socket server');
-        setIsConnected(true);
-        const connectedId = socketService.getPlayerId();
+        console.log('Already connected to socket server')
+        setIsConnected(true)
+        const connectedId = socketService.getPlayerId()
         if (connectedId) {
-          setPlayerId(connectedId);
+          setPlayerId(connectedId)
         }
         
-        // Get available rooms
-        const rooms = await socketService.getAvailableRooms();
-        setAvailableRooms(rooms || []);
+        const rooms = await socketService.getAvailableRooms()
+        setAvailableRooms(rooms || [])
         
-        setupSocketListeners();
-        setIsConnecting(false);
-        return;
+        setupSocketListeners()
+        setIsConnecting(false)
+        return
       }
       
-      console.log('Connecting to socket server...');
+      console.log('Connecting to socket server...')
       
-      // Connect to socket server
-      const id = await socketService.connect();
-      console.log(`Connected with ID: ${id}`);
-      setPlayerId(id);
-      setIsConnected(true);
+      const id = await socketService.connect()
+      console.log(`Connected with ID: ${id}`)
+      setPlayerId(id)
+      setIsConnected(true)
       
-      // Setup socket event listeners
-      setupSocketListeners();
+      setupSocketListeners()
       
-      // Fetch available rooms
-      const rooms = await socketService.getAvailableRooms();
-      setAvailableRooms(rooms || []);
+      const rooms = await socketService.getAvailableRooms()
+      setAvailableRooms(rooms || [])
       
     } catch (error: any) {
-      console.error('Failed to connect to socket server:', error);
-      setConnectionError(error.message || 'Failed to connect to server. Please try again.');
+      console.error('Failed to connect to socket server:', error)
+      setConnectionError(error.message || 'Failed to connect to server. Please try again.')
     } finally {
-      setIsConnecting(false);
+      setIsConnecting(false)
     }
-  }, [isConnecting, setupSocketListeners]);
+  }, [isConnecting, setupSocketListeners])
   
   // Disconnect from socket server
   const disconnect = useCallback(() => {
-    socketService.disconnect();
-    setIsConnected(false);
-    setPlayerId("");
-    setCurrentRoom(null);
-    setAvailableRooms([]);
-  }, []);
+    socketService.disconnect()
+    setIsConnected(false)
+    setPlayerId("")
+    setCurrentRoom(null)
+    setAvailableRooms([])
+    setContractMatchId(null)
+  }, [])
   
-  // Create a new room with improved error handling
-  const createRoom = useCallback((name?: string, isPrivate: boolean = false): void => {
+  // Create room with optional contract integration
+  const createRoom = useCallback((name?: string, isPrivate: boolean = false, stake?: string): void => {
     if (!isConnected) {
       connect().then(() => {
-        console.log(`Connected, now creating room with name: ${name}`);
-        socketService.createRoom(name, isPrivate);
+        console.log(`Connected, now creating room with name: ${name}`)
+        socketService.createRoom(name, isPrivate)
       }).catch(error => {
-        console.error("Failed to connect before creating room:", error);
+        console.error("Failed to connect before creating room:", error)
         const errorEvent = new CustomEvent('create_room_error', { 
           detail: { error: "Failed to connect to server. Please try again." } 
-        });
-        window.dispatchEvent(errorEvent);
-      });
-      return;
+        })
+        window.dispatchEvent(errorEvent)
+      })
+      return
     }
     
-    // Call the socket service to create the room
-    socketService.createRoom(name, isPrivate);
-  }, [isConnected, connect]);
+    if (stake) {
+      setStakeAmount(stake)
+    }
+    
+    socketService.createRoom(name, isPrivate)
+  }, [isConnected, connect])
   
-  // Join a room with improved error handling
+  // Join room
   const joinRoom = useCallback((roomId: string) => {
     if (!isConnected) {
       connect().then(() => {
-        console.log(`Connected, now joining room with ID: ${roomId}`);
-        socketService.joinRoom(roomId);
+        console.log(`Connected, now joining room with ID: ${roomId}`)
+        socketService.joinRoom(roomId)
       }).catch(error => {
-        console.error("Failed to connect before joining room:", error);
+        console.error("Failed to connect before joining room:", error)
         const errorEvent = new CustomEvent('join_room_error', { 
           detail: { error: "Failed to connect to multiplayer service" } 
-        });
-        window.dispatchEvent(errorEvent);
-      });
+        })
+        window.dispatchEvent(errorEvent)
+      })
     } else {
-      socketService.joinRoom(roomId);
+      socketService.joinRoom(roomId)
     }
-  }, [isConnected, connect]);
+  }, [isConnected, connect])
   
-  // Leave the current room
+  // Leave room
   const leaveRoom = useCallback(() => {
     if (currentRoom && isConnected) {
-      socketService.leaveRoom(currentRoom.id);
-      setCurrentRoom(null);
-      setIsHost(false);
+      socketService.leaveRoom(currentRoom.id)
+      setCurrentRoom(null)
+      setIsHost(false)
+      setContractMatchId(null)
     }
-  }, [currentRoom, isConnected]);
+  }, [currentRoom, isConnected])
   
-  // Select a character
+  // Select character
   const selectCharacter = useCallback((character: Character) => {
     if (currentRoom && isConnected) {
-      socketService.selectCharacter(character);
+      socketService.selectCharacter(character)
       
-      // Update local state immediately for better UX
       setCurrentRoom(prev => {
-        if (!prev) return null;
+        if (!prev) return null
         
         if (isHost) {
-          return { ...prev, hostCharacter: character };
+          return { ...prev, hostCharacter: character }
         } else {
-          return { ...prev, guestCharacter: character };
+          return { ...prev, guestCharacter: character }
         }
-      });
+      })
     }
-  }, [currentRoom, isConnected, isHost]);
+  }, [currentRoom, isConnected, isHost])
   
   // Set ready status
   const setReady = useCallback((isReady: boolean = true) => {
     if (currentRoom && isConnected) {
-      socketService.setPlayerReady(isReady);
+      socketService.setPlayerReady(isReady)
     }
-  }, [currentRoom, isConnected]);
+  }, [currentRoom, isConnected])
   
-  // Start battle - only host can do this
+  // Start battle
   const startBattle = useCallback(() => {
     if (currentRoom && isConnected && isHost) {
-      // In a real implementation, this would be a server-side check
-      socketService.setPlayerReady(true);
+      socketService.setPlayerReady(true)
     }
-  }, [currentRoom, isConnected, isHost]);
+  }, [currentRoom, isConnected, isHost])
   
-  // Update opponent health (for multiplayer battles)
+  // Contract battle functions
+  const initiateContractMatch = useCallback(async (characterInstanceId: number, stake: string): Promise<number> => {
+    if (!contractConnected || !address) {
+      throw new Error('Contract not connected')
+    }
+    
+    try {
+      // Validate stake amount
+      const validation = Web3Utils.validateStakeAmount(stake)
+      if (!validation.isValid) {
+        throw new Error(validation.error)
+      }
+      
+      // Initiate match on contract
+      const hash = await initiateMatch(characterInstanceId, stake)
+      console.log('Contract match initiated:', hash)
+      
+      // Get the match ID from contract events (simplified - in real implementation would listen to events)
+      // For now, return a mock match ID
+      const matchId = Date.now() % 1000000 // Simplified for demo
+      
+      setContractMatchId(matchId)
+      setStakeAmount(stake)
+      
+      // Notify socket service about contract match
+      socketService.emit('contract_match_created', {
+        matchId,
+        stakeAmount: stake,
+        characterInstanceId
+      })
+      
+      return matchId
+    } catch (error: any) {
+      console.error('Error initiating contract match:', error)
+      throw new Error(Web3Utils.parseContractError(error))
+    }
+  }, [contractConnected, address, initiateMatch])
+  
+  const joinContractMatch = useCallback(async (matchId: number, characterInstanceId: number, stake: string): Promise<void> => {
+    if (!contractConnected || !address) {
+      throw new Error('Contract not connected')
+    }
+    
+    try {
+      // Join match on contract
+      const hash = await joinMatch(matchId, characterInstanceId, stake)
+      console.log('Contract match joined:', hash)
+      
+      setContractMatchId(matchId)
+      
+      // Notify socket service about joining contract match
+      socketService.emit('contract_match_joined', {
+        matchId,
+        characterInstanceId,
+        playerId
+      })
+      
+    } catch (error: any) {
+      console.error('Error joining contract match:', error)
+      throw new Error(Web3Utils.parseContractError(error))
+    }
+  }, [contractConnected, address, joinMatch, playerId])
+  
+  const makeContractMove = useCallback(async (matchId: number, abilityIndex: number): Promise<void> => {
+    if (!contractConnected || !address) {
+      throw new Error('Contract not connected')
+    }
+    
+    try {
+      // Make move on contract
+      const hash = await makeMove(matchId, abilityIndex)
+      console.log('Contract move made:', hash)
+      
+      // Notify socket service about move
+      socketService.emit('contract_move_made', {
+        matchId,
+        abilityIndex,
+        playerId,
+        transactionHash: hash
+      })
+      
+    } catch (error: any) {
+      console.error('Error making contract move:', error)
+      throw new Error(Web3Utils.parseContractError(error))
+    }
+  }, [contractConnected, address, makeMove, playerId])
+  
+  // Legacy functions for compatibility
   const updateOpponentHealth = useCallback((health: number) => {
-    if (!currentRoom || !isConnected) return;
+    if (!currentRoom || !isConnected) return
     
-    // Get the target player ID (opponent)
-    const targetPlayerId = isHost ? 
-      (currentRoom.guestId || "") : 
-      (currentRoom.hostId || "");
-    
-    // Only proceed if we have a valid target
-    if (!targetPlayerId) {
-      console.error("No valid target player found for health update");
-      return;
-    }
-    
-    // In a real implementation, this would be handled as a game action
     socketService.performGameAction({
-      type: 'ability',
-      abilityId: 'damage', // Generic damage ability
-      targetId: targetPlayerId
-    });
-  }, [currentRoom, isConnected, isHost]);
+      type: 'damage',
+      targetHealth: health
+    })
+  }, [currentRoom, isConnected])
   
-  // End battle
   const endBattle = useCallback((winnerId: string) => {
-    if (!currentRoom || !isConnected) return;
+    if (!currentRoom || !isConnected) return
     
-    // In a real implementation, this would be handled by the server
-    // For our implementation, just perform a surrender action
     socketService.performGameAction({
-      type: 'surrender'
-    });
-  }, [currentRoom, isConnected]);
+      type: 'end_battle',
+      winnerId
+    })
+  }, [currentRoom, isConnected])
   
-  // Auto-connect to socket server on component mount
+  // Auto-connect on mount
   useEffect(() => {
-    // Try to connect if not already connected
     if (!isConnected && !isConnecting) {
       connect().catch(err => {
-        console.error("Failed to auto-connect:", err);
-      });
+        console.error("Failed to auto-connect:", err)
+      })
     }
     
-    // Setup effect cleanup
     return () => {
-      // We don't want to fully disconnect on component unmount
-      // as it might be used in other parts of the app
-      // Just clean up listeners
-      socketService.off('room_created');
-      socketService.off('create_room_error');
-      socketService.off('room_joined');
-      socketService.off('join_room_error');
-      socketService.off('player_joined');
-      socketService.off('player_left');
-      socketService.off('room_updated');
-      socketService.off('room_available');
-      socketService.off('room_unavailable');
-      socketService.off('character_selected');
-      socketService.off('player_ready_updated');
-      socketService.off('game_countdown');
-      socketService.off('game_started');
-      socketService.off('game_action_performed');
-      socketService.off('game_over');
-    };
-  }, [isConnected, isConnecting, connect]);
+      // Cleanup listeners on unmount
+      socketService.off('room_created')
+      socketService.off('create_room_error')
+      socketService.off('room_joined')
+      socketService.off('join_room_error')
+      socketService.off('player_joined')
+      socketService.off('player_left')
+      socketService.off('room_updated')
+      socketService.off('room_available')
+      socketService.off('room_unavailable')
+      socketService.off('character_selected')
+      socketService.off('player_ready_updated')
+      socketService.off('game_countdown')
+      socketService.off('game_started')
+      socketService.off('game_action_performed')
+      socketService.off('game_over')
+      socketService.off('contract_match_created')
+      socketService.off('contract_match_joined')
+      socketService.off('contract_move_made')
+    }
+  }, [isConnected, isConnecting, connect])
   
   return (
     <MultiplayerContext.Provider
       value={{
+        // Connection State
         isConnected,
         isConnecting,
         connectionError,
+        
+        // Player State
         isHost,
         playerId,
         playerName,
+        
+        // Room State
         currentRoom,
         availableRooms,
+        
+        // Contract Integration
+        contractMatchId,
+        stakeAmount,
+        
+        // Actions
         setPlayerName,
         connect,
         disconnect,
@@ -669,17 +704,15 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
         setReady,
         updateOpponentHealth,
         endBattle,
-        startBattle
+        startBattle,
+        
+        // Contract Battle Actions
+        initiateContractMatch,
+        joinContractMatch,
+        makeContractMove
       }}
     >
       {children}
     </MultiplayerContext.Provider>
-  );
+  )
 }
-
-
-
-
-
-
-

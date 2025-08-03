@@ -1,13 +1,17 @@
+// components/game-screen.tsx - Phase 3: Contract Integration
 "use client"
 
 import { useState, useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
-import { Heart, Droplet, Sword, Shield } from "lucide-react"
+import { Heart, Droplet, Sword, Shield, Home, Trophy, Coins } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
 import { useGameState } from "./game-state-provider"
 import { playSound } from "@/lib/sound-utils"
 import BattleEffects from "./battle-effects"
+import TransactionStatus from "./transaction-status"
+import { useContract } from "@/hooks/use-contract"
+import { Web3Utils } from "@/lib/Web3-Utils"
 
 interface GameScreenProps {
   onGameOver: () => void
@@ -38,7 +42,10 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
     gainExperience,
     addToBattleLog,
     resetBattleLog,
+    setCurrentEnemy
   } = useGameState()
+
+  const { isConnected } = useContract()
 
   const [playerTurn, setPlayerTurn] = useState(true)
   const [selectedAbility, setSelectedAbility] = useState<string | null>(null)
@@ -48,103 +55,226 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
   const [turnCount, setTurnCount] = useState(1)
   const [comboCounter, setComboCounter] = useState(0)
   const [showComboText, setShowComboText] = useState(false)
+  const [isGameOver, setIsGameOver] = useState(false)
+  const [battleRewards, setBattleRewards] = useState<{xp: number, gold: number} | null>(null)
 
   const battleLogRef = useRef<HTMLDivElement>(null)
 
-  // Scroll battle log to bottom when updated
+  // Auto-scroll battle log
   useEffect(() => {
     if (battleLogRef.current) {
       battleLogRef.current.scrollTop = battleLogRef.current.scrollHeight
     }
   }, [battleLog])
 
-  // Check for game over or victory
+  // Initialize battle
   useEffect(() => {
-    if (playerHealth <= 0) {
+    if (selectedCharacter && !currentEnemy && !isGameOver) {
+      // Generate enemy based on current level
+      const enemy = generateEnemy(level)
+      setCurrentEnemy(enemy)
+      addToBattleLog(`Battle started against ${enemy.name}!`)
+      addToBattleLog("Your turn - choose an ability!")
+    }
+  }, [selectedCharacter, currentEnemy, level, isGameOver, setCurrentEnemy, addToBattleLog])
+
+  // Check for game over conditions
+  useEffect(() => {
+    if (playerHealth <= 0 && !isGameOver) {
+      setIsGameOver(true)
       addToBattleLog("You have been defeated!")
       setTimeout(() => {
         onGameOver()
       }, 2000)
     }
+  }, [playerHealth, isGameOver, addToBattleLog, onGameOver])
 
-    if (currentEnemy && currentEnemy.health <= 0) {
-      const expGained = currentEnemy.level * 25
-      const goldGained = currentEnemy.level * 15
-      const scoreGained = currentEnemy.level * 100
+  // Check for victory conditions
+  useEffect(() => {
+    if (currentEnemy && currentEnemy.health <= 0 && !isGameOver) {
+      setIsGameOver(true)
+      
+      // Calculate rewards based on enemy level and performance
+      const baseXP = currentEnemy.level * 25
+      const baseGold = currentEnemy.level * 15
+      const comboBonus = Math.floor(comboCounter * 0.1)
+      
+      const finalXP = Math.floor(baseXP * (1 + comboBonus))
+      const finalGold = Math.floor(baseGold * (1 + comboBonus))
+      const scoreGained = currentEnemy.level * 100 + (comboCounter * 50)
 
-      addToBattleLog(`You defeated ${currentEnemy.name}!`)
-      addToBattleLog(`Gained ${expGained} XP and ${goldGained} gold!`)
+      setBattleRewards({ xp: finalXP, gold: finalGold })
 
+      addToBattleLog(`Victory! Defeated ${currentEnemy.name}!`)
+      addToBattleLog(`Gained ${finalXP} XP and ${finalGold} gold!`)
+      if (comboCounter > 0) {
+        addToBattleLog(`Combo bonus: +${Math.floor(comboBonus * 100)}%`)
+      }
+
+      // Apply rewards
       increaseScore(scoreGained)
-      increaseGold(goldGained)
-      gainExperience(expGained)
+      increaseGold(finalGold)
+      gainExperience(finalXP)
 
       setTimeout(() => {
         onVictory()
-      }, 2000)
+      }, 3000)
     }
-  }, [playerHealth, currentEnemy, addToBattleLog, onGameOver, onVictory, increaseScore, increaseGold, gainExperience])
+  }, [currentEnemy, isGameOver, comboCounter, addToBattleLog, increaseScore, increaseGold, gainExperience, onVictory])
 
   // Enemy turn logic
   useEffect(() => {
-    if (!playerTurn && currentEnemy && currentEnemy.health > 0 && playerHealth > 0) {
+    if (!playerTurn && currentEnemy && currentEnemy.health > 0 && playerHealth > 0 && !isGameOver) {
       const enemyTurnTimeout = setTimeout(() => {
-        // Enemy selects a random ability
-        const randomAbilityIndex = Math.floor(Math.random() * currentEnemy.abilities.length)
-        const enemyAbility = currentEnemy.abilities[randomAbilityIndex]
-
-        // Calculate damage
-        const damage = Math.max(5, enemyAbility.damage)
+        // Enemy AI: Select ability based on current situation
+        const availableAbilities = currentEnemy.abilities.filter(ability => 
+          ability.currentCooldown <= turnCount
+        )
+        
+        let selectedEnemyAbility
+        if (availableAbilities.length === 0) {
+          // Use basic attack if all abilities on cooldown
+          selectedEnemyAbility = {
+            id: 'basic_attack',
+            name: 'Basic Attack',
+            damage: Math.floor(currentEnemy.level * 8),
+            manaCost: 0,
+            cooldown: 0,
+            currentCooldown: 0,
+            type: 'physical' as const,
+            description: 'A basic physical attack',
+            soundEffect: 'basic-attack.mp3'
+          }
+        } else {
+          // Smart AI: prefer high damage abilities when player health is low
+          if (playerHealth < playerMaxHealth * 0.3) {
+            selectedEnemyAbility = availableAbilities.reduce((prev, current) => 
+              prev.damage > current.damage ? prev : current
+            )
+          } else {
+            // Random selection for balanced gameplay
+            selectedEnemyAbility = availableAbilities[Math.floor(Math.random() * availableAbilities.length)]
+          }
+        }
 
         // Play enemy attack sound
-        playSound(enemyAbility.soundEffect)
+        playSound(selectedEnemyAbility.soundEffect)
 
         // Show enemy attack animation
-        setEnemyAnimation(enemyAbility.type)
+        setEnemyAnimation(selectedEnemyAbility.type)
 
         // Add to battle log
-        addToBattleLog(`${currentEnemy.name} used ${enemyAbility.name}!`)
+        addToBattleLog(`${currentEnemy.name} used ${selectedEnemyAbility.name}!`)
 
-        // Delay damage to match animation
+        // Calculate and apply damage
         setTimeout(() => {
+          const damage = calculateEnemyDamage(selectedEnemyAbility.damage, currentEnemy.level)
           updatePlayerHealth(-damage)
           addToBattleLog(`You took ${damage} damage!`)
 
-          // Reset combo if hit
+          // Reset combo on being hit
           setComboCounter(0)
 
-          // Clear animation after a delay
+          // Update ability cooldown
+          if (selectedEnemyAbility.cooldown > 0) {
+            const abilityIndex = currentEnemy.abilities.findIndex(a => a.id === selectedEnemyAbility.id)
+            if (abilityIndex >= 0) {
+              currentEnemy.abilities[abilityIndex].currentCooldown = turnCount + selectedEnemyAbility.cooldown
+            }
+          }
+
+          // Clear animation and switch turns
           setTimeout(() => {
             setEnemyAnimation(null)
-            // Switch back to player turn
-            setPlayerTurn(true)
-            setTurnCount((prev) => prev + 1)
-            addToBattleLog("Your turn!")
+            if (playerHealth - damage > 0) {
+              setPlayerTurn(true)
+              setTurnCount(prev => prev + 1)
+              addToBattleLog("Your turn!")
+            }
           }, 500)
         }, 500)
       }, 1500)
 
       return () => clearTimeout(enemyTurnTimeout)
     }
-  }, [playerTurn, currentEnemy, playerHealth, updatePlayerHealth, addToBattleLog])
+  }, [playerTurn, currentEnemy, playerHealth, playerMaxHealth, turnCount, isGameOver, updatePlayerHealth, addToBattleLog])
+
+  const calculateEnemyDamage = (baseDamage: number, enemyLevel: number): number => {
+    const levelMultiplier = 1 + (enemyLevel - 1) * 0.1
+    const randomFactor = 0.8 + Math.random() * 0.4 // 80-120% damage variance
+    return Math.floor(baseDamage * levelMultiplier * randomFactor)
+  }
+
+  const generateEnemy = (currentLevel: number) => {
+    const enemyTypes = [
+      {
+        name: "Corrupted Guardian",
+        baseHealth: 80,
+        abilities: [
+          { id: "shadow_strike", name: "Shadow Strike", damage: 15, manaCost: 0, cooldown: 2, currentCooldown: 0, type: "physical" as const, description: "A dark physical attack", soundEffect: "shadow-attack.mp3" },
+          { id: "void_pulse", name: "Void Pulse", damage: 25, manaCost: 0, cooldown: 4, currentCooldown: 0, type: "physical" as const, description: "A pulse of void energy", soundEffect: "void-attack.mp3" }
+        ]
+      },
+      {
+        name: "Lightning Wraith",
+        baseHealth: 70,
+        abilities: [
+          { id: "lightning_bolt", name: "Lightning Bolt", damage: 20, manaCost: 0, cooldown: 1, currentCooldown: 0, type: "lightning" as const, description: "A bolt of lightning", soundEffect: "lightning-ability.mp3" },
+          { id: "storm_call", name: "Storm Call", damage: 30, manaCost: 0, cooldown: 5, currentCooldown: 0, type: "lightning" as const, description: "Calls down a storm", soundEffect: "storm-attack.mp3" }
+        ]
+      },
+      {
+        name: "Flame Demon",
+        baseHealth: 85,
+        abilities: [
+          { id: "fire_blast", name: "Fire Blast", damage: 18, manaCost: 0, cooldown: 2, currentCooldown: 0, type: "fire" as const, description: "A blast of fire", soundEffect: "fire-ability.mp3" },
+          { id: "inferno", name: "Inferno", damage: 35, manaCost: 0, cooldown: 6, currentCooldown: 0, type: "fire" as const, description: "A raging inferno", soundEffect: "inferno-attack.mp3" }
+        ]
+      }
+    ]
+
+    const randomType = enemyTypes[Math.floor(Math.random() * enemyTypes.length)]
+    const scaleFactor = 1 + (currentLevel - 1) * 0.2
+    const health = Math.floor(randomType.baseHealth * scaleFactor)
+
+    return {
+      id: `enemy_${Date.now()}`,
+      name: randomType.name,
+      avatar: `/images/enemy-${Math.floor(Math.random() * 3) + 1}.png`,
+      health,
+      maxHealth: health,
+      abilities: randomType.abilities,
+      level: currentLevel
+    }
+  }
 
   const handleAbilitySelect = (abilityId: string) => {
-    if (!playerTurn || !currentEnemy || !selectedCharacter) return
+    if (!playerTurn || isGameOver || !selectedCharacter || !currentEnemy) return
 
-    const ability = selectedCharacter.abilities.find((a) => a.id === abilityId)
+    const ability = selectedCharacter.abilities.find(a => a.id === abilityId)
     if (!ability) return
 
     setSelectedAbility(abilityId)
 
-    // Check if player has enough mana
+    // Check mana cost
     if (playerMana < ability.manaCost) {
       addToBattleLog(`Not enough mana to use ${ability.name}!`)
       setSelectedAbility(null)
       return
     }
 
+    // Check cooldown
+    if (ability.currentCooldown > turnCount) {
+      addToBattleLog(`${ability.name} is on cooldown!`)
+      setSelectedAbility(null)
+      return
+    }
+
     // Use the ability
     updatePlayerMana(-ability.manaCost)
+    
+    // Set cooldown
+    ability.currentCooldown = turnCount + ability.cooldown
 
     // Play ability sound
     playSound(ability.soundEffect)
@@ -155,7 +285,7 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
     // Add to battle log
     addToBattleLog(`You used ${ability.name}!`)
 
-    // Increase combo counter
+    // Update combo counter
     const newCombo = comboCounter + 1
     setComboCounter(newCombo)
 
@@ -164,28 +294,34 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
       setTimeout(() => setShowComboText(false), 1500)
     }
 
-    // Calculate damage with combo bonus
-    const comboMultiplier = 1 + newCombo * 0.1
-    const damage = Math.floor(ability.damage * comboMultiplier)
+    // Calculate damage with level and combo bonuses
+    const levelBonus = selectedCharacter.level ? (selectedCharacter.level - 1) * 2 : 0
+    const comboMultiplier = 1 + (newCombo - 1) * 0.15
+    const baseDamage = ability.damage + levelBonus
+    const finalDamage = Math.floor(baseDamage * comboMultiplier)
 
-    // Delay damage to match animation
+    // Apply damage after animation delay
     setTimeout(() => {
-      damageEnemy(damage)
+      damageEnemy(finalDamage)
 
-      // Add combo text to battle log if applicable
+      // Add damage info to battle log
       if (newCombo > 1) {
-        addToBattleLog(`${newCombo}x COMBO! ${damage} damage!`)
+        addToBattleLog(`${newCombo}x COMBO! Dealt ${finalDamage} damage!`)
       } else {
-        addToBattleLog(`${currentEnemy.name} took ${damage} damage!`)
+        addToBattleLog(`${currentEnemy.name} took ${finalDamage} damage!`)
       }
 
-      // Clear animation and selected ability after a delay
+      // Clear animation and switch turns
       setTimeout(() => {
         setAbilityAnimation(null)
         setSelectedAbility(null)
 
+        // Regenerate mana
+        const manaRegen = Math.floor(playerMaxMana * 0.1) // 10% mana regen per turn
+        updatePlayerMana(manaRegen)
+
         // Switch to enemy turn if enemy is still alive
-        if (currentEnemy.health - damage > 0) {
+        if (currentEnemy.health - finalDamage > 0) {
           setPlayerTurn(false)
           addToBattleLog(`${currentEnemy.name}'s turn...`)
         }
@@ -200,32 +336,66 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
 
   const handleExitGame = () => {
     playSound("button-click.mp3")
-    resetBattleLog()
-    onExit()
+    if (window.confirm("Are you sure you want to exit? Progress will be saved.")) {
+      resetBattleLog()
+      onExit()
+    } else {
+      setShowPauseMenu(false)
+    }
   }
 
-  if (!selectedCharacter || !currentEnemy) {
-    return <div className="flex items-center justify-center min-h-screen">Loading battle...</div>
+  // Show loading if no character selected
+  if (!selectedCharacter) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-900">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold mb-4 text-yellow-400">No Character Selected</h2>
+          <p className="text-gray-300 mb-4">Please select a character first</p>
+          <Button onClick={onExit}>Return to Character Selection</Button>
+        </div>
+      </div>
+    )
+  }
+
+  // Show loading if no enemy
+  if (!currentEnemy) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-900">
+        <div className="text-center">
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+            className="mb-4"
+          >
+            <Sword className="h-16 w-16 text-yellow-400 mx-auto" />
+          </motion.div>
+          <h2 className="text-2xl font-bold text-yellow-400">Preparing Battle...</h2>
+        </div>
+      </div>
+    )
   }
 
   return (
-    <div
-      className="relative min-h-screen w-full overflow-hidden bg-gray-900"
-      style={{
-        backgroundImage: `url(/images/battle-background.jpg)`,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-      }}
-    >
-      {/* Battle UI */}
+    <div className="relative min-h-screen w-full overflow-hidden bg-gray-900">
+      {/* Battle Background */}
+      <div 
+        className="absolute inset-0 bg-cover bg-center"
+        style={{
+          backgroundImage: `url(/images/battle-background-${level % 3 + 1}.jpg)`,
+        }}
+      >
+        <div className="absolute inset-0 bg-black/40"></div>
+      </div>
+
+      {/* Battle HUD */}
       <div className="absolute top-0 left-0 right-0 p-4 flex justify-between items-start z-10">
         {/* Player Stats */}
-        <div className="bg-black/70 p-3 rounded-lg w-64">
-          <div className="flex items-center mb-2">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-yellow-500 to-amber-700 p-0.5 mr-2">
+        <div className="bg-black/80 p-4 rounded-lg w-72 border border-yellow-600/50">
+          <div className="flex items-center mb-3">
+            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-yellow-500 to-amber-700 p-0.5 mr-3">
               <div className="w-full h-full rounded-full overflow-hidden bg-gray-900">
                 <img
-                  src={selectedCharacter.avatar || "/placeholder.svg?height=40&width=40"}
+                  src={selectedCharacter.avatar || "/placeholder.svg?height=48&width=48"}
                   alt={selectedCharacter.name}
                   className="w-full h-full object-cover"
                 />
@@ -233,7 +403,7 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
             </div>
             <div>
               <h3 className="font-bold text-white">{selectedCharacter.name}</h3>
-              <div className="text-xs text-gray-300">Level {playerLevel}</div>
+              <div className="text-xs text-gray-300">Level {selectedCharacter.level || 1}</div>
             </div>
           </div>
 
@@ -242,11 +412,9 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
               <div className="flex justify-between items-center text-xs mb-1">
                 <div className="flex items-center">
                   <Heart className="h-3 w-3 text-red-500 mr-1" />
-                  <span>HP</span>
+                  <span>Health</span>
                 </div>
-                <span>
-                  {playerHealth}/{playerMaxHealth}
-                </span>
+                <span>{playerHealth}/{playerMaxHealth}</span>
               </div>
               <Progress
                 value={(playerHealth / playerMaxHealth) * 100}
@@ -259,11 +427,9 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
               <div className="flex justify-between items-center text-xs mb-1">
                 <div className="flex items-center">
                   <Droplet className="h-3 w-3 text-blue-500 mr-1" />
-                  <span>MP</span>
+                  <span>Mana</span>
                 </div>
-                <span>
-                  {playerMana}/{playerMaxMana}
-                </span>
+                <span>{playerMana}/{playerMaxMana}</span>
               </div>
               <Progress
                 value={(playerMana / playerMaxMana) * 100}
@@ -272,58 +438,56 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
               />
             </div>
 
-            <div>
-              <div className="flex justify-between items-center text-xs mb-1">
-                <span>XP</span>
-                <span>
-                  {experience}/{experienceToNextLevel}
-                </span>
+            {/* Combo Counter */}
+            {comboCounter > 0 && (
+              <div className="bg-purple-900/50 border border-purple-500/50 rounded p-2">
+                <div className="text-center">
+                  <span className="text-purple-300 text-sm">Combo</span>
+                  <div className="text-purple-400 font-bold">{comboCounter}x</div>
+                </div>
               </div>
-              <Progress
-                value={(experience / experienceToNextLevel) * 100}
-                className="h-2 bg-gray-700"
-                indicatorClassName="bg-green-500"
-              />
-            </div>
+            )}
           </div>
         </div>
 
         {/* Battle Info */}
-        <div className="bg-black/70 p-3 rounded-lg">
-          <div className="flex items-center justify-between gap-4">
-            <div className="text-center">
-              <div className="text-xs text-gray-300">Turn</div>
-              <div className="font-bold text-yellow-400">{turnCount}</div>
+        <div className="bg-black/80 p-4 rounded-lg border border-purple-600/50">
+          <div className="text-center">
+            <div className="text-xs text-gray-300 mb-1">Battle Level {level}</div>
+            <div className="text-sm font-bold text-yellow-400 mb-2">Turn {turnCount}</div>
+            <div className="text-xs text-purple-300">
+              {playerTurn ? "Your Turn" : `${currentEnemy.name}'s Turn`}
             </div>
-
-            <div className="text-center">
-              <div className="text-xs text-gray-300">Score</div>
-              <div className="font-bold text-yellow-400">{score}</div>
-            </div>
-
-            <div className="text-center">
-              <div className="text-xs text-gray-300">Gold</div>
-              <div className="font-bold text-yellow-400">{gold}</div>
-            </div>
-
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={togglePauseMenu}
-              className="bg-gray-800/90 hover:bg-gray-700/90 ml-2"
-            >
-              Menu
-            </Button>
           </div>
+          
+          <div className="mt-3 flex justify-between text-xs">
+            <div className="text-center">
+              <Trophy className="h-4 w-4 text-yellow-500 mx-auto mb-1" />
+              <div className="text-yellow-400">{score}</div>
+            </div>
+            <div className="text-center">
+              <Coins className="h-4 w-4 text-yellow-500 mx-auto mb-1" />
+              <div className="text-yellow-400">{gold}</div>
+            </div>
+          </div>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={togglePauseMenu}
+            className="w-full mt-3 bg-gray-800/90 hover:bg-gray-700/90"
+          >
+            Menu
+          </Button>
         </div>
 
         {/* Enemy Stats */}
-        <div className="bg-black/70 p-3 rounded-lg w-64">
-          <div className="flex items-center mb-2">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-red-500 to-red-700 p-0.5 mr-2">
+        <div className="bg-black/80 p-4 rounded-lg w-72 border border-red-600/50">
+          <div className="flex items-center mb-3">
+            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-red-500 to-red-700 p-0.5 mr-3">
               <div className="w-full h-full rounded-full overflow-hidden bg-gray-900">
                 <img
-                  src={currentEnemy.avatar || "/placeholder.svg?height=40&width=40"}
+                  src={currentEnemy.avatar || "/placeholder.svg?height=48&width=48"}
                   alt={currentEnemy.name}
                   className="w-full h-full object-cover"
                 />
@@ -339,28 +503,15 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
             <div className="flex justify-between items-center text-xs mb-1">
               <div className="flex items-center">
                 <Heart className="h-3 w-3 text-red-500 mr-1" />
-                <span>HP</span>
+                <span>Health</span>
               </div>
-              <span>
-                {currentEnemy.health}/{currentEnemy.maxHealth}
-              </span>
+              <span>{currentEnemy.health}/{currentEnemy.maxHealth}</span>
             </div>
             <Progress
               value={(currentEnemy.health / currentEnemy.maxHealth) * 100}
               className="h-2 bg-gray-700"
               indicatorClassName="bg-red-500"
             />
-          </div>
-
-          <div className="flex justify-between mt-2 text-xs">
-            <div className="flex items-center">
-              <Sword className="h-3 w-3 text-orange-500 mr-1" />
-              <span>Attack: {currentEnemy.level * 10 + 10}</span>
-            </div>
-            <div className="flex items-center">
-              <Shield className="h-3 w-3 text-blue-500 mr-1" />
-              <span>Def: {currentEnemy.level * 5 + 5}</span>
-            </div>
           </div>
         </div>
       </div>
@@ -370,76 +521,40 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
         {/* Battle Effects */}
         <BattleEffects playerAnimation={abilityAnimation} enemyAnimation={enemyAnimation} />
 
-        {/* Enemy */}
+        {/* Enemy Character */}
         <motion.div
-          className="absolute right-1/4 top-1/3"
+          className="absolute right-1/4 top-1/3 z-20"
           animate={enemyAnimation ? { x: [-10, 10, -5, 5, 0], y: [-5, 5, -2, 2, 0] } : {}}
           transition={{ duration: 0.5 }}
         >
-          <div className="relative">
-            <motion.div
-              animate={{
-                scale: [1, 1.05, 1],
-              }}
-              transition={{
-                repeat: Number.POSITIVE_INFINITY,
-                duration: 2,
-                repeatType: "reverse",
-              }}
-            >
-              <img
-                src={currentEnemy.avatar || "/placeholder.svg?height=200&width=200"}
-                alt={currentEnemy.name}
-                className="w-40 h-40 object-contain filter drop-shadow-lg"
-              />
-            </motion.div>
-
-            {/* Enemy Health Bar */}
-            <div className="absolute -bottom-6 left-1/2 transform -translate-x-1/2 w-32">
-              <div className="h-2 bg-gray-900/80 rounded-full">
-                <div
-                  className="h-2 bg-gradient-to-r from-red-600 to-red-400 rounded-full transition-all duration-300"
-                  style={{ width: `${(currentEnemy.health / currentEnemy.maxHealth) * 100}%` }}
-                ></div>
-              </div>
-            </div>
-          </div>
+          <motion.div
+            animate={{ scale: [1, 1.02, 1] }}
+            transition={{ repeat: Infinity, duration: 3, repeatType: "reverse" }}
+          >
+            <img
+              src={currentEnemy.avatar || "/placeholder.svg?height=200&width=200"}
+              alt={currentEnemy.name}
+              className="w-48 h-48 object-contain filter drop-shadow-2xl"
+            />
+          </motion.div>
         </motion.div>
 
         {/* Player Character */}
         <motion.div
-          className="absolute left-1/4 bottom-1/3"
+          className="absolute left-1/4 bottom-1/3 z-20"
           animate={abilityAnimation ? { rotate: [-2, 2, -1, 1, 0] } : {}}
           transition={{ duration: 0.3 }}
         >
-          <div className="relative">
-            <motion.div
-              animate={{
-                y: [0, -5, 0],
-              }}
-              transition={{
-                repeat: Number.POSITIVE_INFINITY,
-                duration: 2,
-                repeatType: "reverse",
-              }}
-            >
-              <img
-                src={selectedCharacter.avatar || "/placeholder.svg?height=200&width=200"}
-                alt={selectedCharacter.name}
-                className="w-40 h-40 object-contain filter drop-shadow-lg"
-              />
-            </motion.div>
-
-            {/* Player Health Bar */}
-            <div className="absolute -bottom-6 left-1/2 transform -translate-x-1/2 w-32">
-              <div className="h-2 bg-gray-900/80 rounded-full">
-                <div
-                  className="h-2 bg-gradient-to-r from-green-600 to-green-400 rounded-full transition-all duration-300"
-                  style={{ width: `${(playerHealth / playerMaxHealth) * 100}%` }}
-                ></div>
-              </div>
-            </div>
-          </div>
+          <motion.div
+            animate={{ y: [0, -5, 0] }}
+            transition={{ repeat: Infinity, duration: 2.5, repeatType: "reverse" }}
+          >
+            <img
+              src={selectedCharacter.avatar || "/placeholder.svg?height=200&width=200"}
+              alt={selectedCharacter.name}
+              className="w-48 h-48 object-contain filter drop-shadow-2xl"
+            />
+          </motion.div>
         </motion.div>
 
         {/* Combo Text */}
@@ -450,9 +565,32 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
               animate={{ scale: 1.5, opacity: 1, y: -50 }}
               exit={{ scale: 0.5, opacity: 0, y: -100 }}
               transition={{ duration: 0.5 }}
-              className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-20"
+              className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-30"
             >
-              <div className="text-4xl font-bold text-yellow-400 filter drop-shadow-lg">{comboCounter}x COMBO!</div>
+              <div className="text-6xl font-bold text-purple-400 filter drop-shadow-lg">
+                {comboCounter}x COMBO!
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Victory Rewards Display */}
+        <AnimatePresence>
+          {battleRewards && (
+            <motion.div
+              initial={{ scale: 0.5, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.5, opacity: 0 }}
+              className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-30"
+            >
+              <div className="bg-black/90 border-2 border-yellow-500 rounded-lg p-6 text-center">
+                <Trophy className="h-12 w-12 text-yellow-400 mx-auto mb-3" />
+                <h3 className="text-2xl font-bold text-yellow-400 mb-3">Victory!</h3>
+                <div className="space-y-2">
+                  <div className="text-green-400">+{battleRewards.xp} XP</div>
+                  <div className="text-yellow-400">+{battleRewards.gold} Gold</div>
+                </div>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
@@ -461,45 +599,62 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
       {/* Battle Log */}
       <div
         ref={battleLogRef}
-        className="absolute bottom-32 left-4 w-64 h-40 bg-black/70 rounded-lg p-3 overflow-y-auto text-sm"
+        className="absolute bottom-32 left-4 w-80 h-48 bg-black/80 rounded-lg p-4 overflow-y-auto text-sm border border-gray-600 z-10"
       >
+        <div className="text-yellow-400 font-bold mb-2 border-b border-gray-600 pb-1">Battle Log</div>
         {battleLog.map((log, index) => (
-          <div key={index} className="mb-1">
+          <div key={index} className="mb-1 text-gray-200">
             {log}
           </div>
         ))}
       </div>
 
-      {/* Abilities */}
-      <div className="absolute bottom-0 left-0 right-0 p-4 bg-black/80">
-        <div className="grid grid-cols-3 gap-3">
-          {selectedCharacter.abilities.map((ability) => (
-            <Button
-              key={ability.id}
-              onClick={() => handleAbilitySelect(ability.id)}
-              disabled={!playerTurn || playerMana < ability.manaCost}
-              className={`
-                relative p-3 h-auto text-left
-                ${selectedAbility === ability.id ? "bg-yellow-600 hover:bg-yellow-700" : "bg-gray-800 hover:bg-gray-700"}
-                ${playerMana < ability.manaCost ? "opacity-50 cursor-not-allowed" : ""}
-              `}
-            >
-              <div>
-                <div className="font-bold mb-1">{ability.name}</div>
-                <div className="text-xs text-gray-300 mb-2">{ability.description}</div>
-                <div className="flex justify-between text-xs">
-                  <div className="flex items-center">
-                    <Sword className="h-3 w-3 text-red-400 mr-1" />
-                    <span>{ability.damage}</span>
-                  </div>
-                  <div className="flex items-center">
-                    <Droplet className="h-3 w-3 text-blue-400 mr-1" />
-                    <span>{ability.manaCost}</span>
+      {/* Abilities Panel */}
+      <div className="absolute bottom-0 left-0 right-0 p-4 bg-black/90 border-t border-gray-600 z-10">
+        <div className="grid grid-cols-4 gap-3 max-w-4xl mx-auto">
+          {selectedCharacter.abilities.map((ability) => {
+            const isOnCooldown = ability.currentCooldown > turnCount
+            const canAfford = playerMana >= ability.manaCost
+            const canUse = playerTurn && !isGameOver && canAfford && !isOnCooldown
+
+            return (
+              <Button
+                key={ability.id}
+                onClick={() => handleAbilitySelect(ability.id)}
+                disabled={!canUse}
+                className={`
+                  relative p-4 h-auto text-left border-2 transition-all
+                  ${selectedAbility === ability.id 
+                    ? "bg-yellow-600 hover:bg-yellow-700 border-yellow-400" 
+                    : "bg-gray-800 hover:bg-gray-700 border-gray-600"
+                  }
+                  ${!canUse ? "opacity-50 cursor-not-allowed" : ""}
+                `}
+              >
+                <div>
+                  <div className="font-bold text-white mb-1">{ability.name}</div>
+                  <div className="text-xs text-gray-300 mb-2">{ability.description}</div>
+                  <div className="flex justify-between items-center text-xs">
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center">
+                        <Sword className="h-3 w-3 text-red-400 mr-1" />
+                        <span>{ability.damage}</span>
+                      </div>
+                      <div className="flex items-center">
+                        <Droplet className="h-3 w-3 text-blue-400 mr-1" />
+                        <span>{ability.manaCost}</span>
+                      </div>
+                    </div>
+                    {isOnCooldown && (
+                      <div className="text-orange-400">
+                        CD: {ability.currentCooldown - turnCount}
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
-            </Button>
-          ))}
+              </Button>
+            )
+          })}
         </div>
       </div>
 
@@ -516,21 +671,34 @@ export default function GameScreen({ onGameOver, onVictory, onExit }: GameScreen
               initial={{ scale: 0.9 }}
               animate={{ scale: 1 }}
               exit={{ scale: 0.9 }}
-              className="bg-gray-900 p-8 rounded-lg w-80"
+              className="bg-gray-900 p-8 rounded-lg w-80 border border-purple-600"
             >
               <h2 className="text-2xl font-bold text-center mb-6 text-yellow-400">Game Paused</h2>
 
               <div className="space-y-4">
-                <Button
-                  onClick={togglePauseMenu}
-                  className="w-full bg-yellow-600 hover:bg-yellow-700 text-black font-bold"
-                >
-                  Resume Game
-                </Button>
+                <div className="text-center text-gray-300 space-y-1">
+                  <div>Level: {level}</div>
+                  <div>Score: {score}</div>
+                  <div>Gold: {gold}</div>
+                  {isConnected && <div className="text-green-400 text-sm">✓ Blockchain connected</div>}
+                </div>
 
-                <Button onClick={handleExitGame} className="w-full bg-red-600 hover:bg-red-700">
-                  Exit to Main Menu
-                </Button>
+                <div className="border-t border-gray-700 pt-4 space-y-3">
+                  <Button
+                    onClick={togglePauseMenu}
+                    className="w-full bg-yellow-600 hover:bg-yellow-700 text-black font-bold"
+                  >
+                    Resume Battle
+                  </Button>
+
+                  <Button 
+                    onClick={handleExitGame} 
+                    className="w-full bg-red-600 hover:bg-red-700"
+                  >
+                    <Home className="mr-2 h-4 w-4" />
+                    Exit to Main Menu
+                  </Button>
+                </div>
               </div>
             </motion.div>
           </motion.div>

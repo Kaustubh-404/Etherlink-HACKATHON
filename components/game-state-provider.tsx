@@ -1,6 +1,10 @@
+// components/game-state-provider.tsx - Phase 3: Contract Integration
 "use client"
 
-import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
+import { useContract } from "@/hooks/use-contract"
+import { useAccount } from "wagmi"
+import { Web3Utils, type CharacterType, type CharacterInstance } from "@/lib/Web3-Utils"
 
 export type Character = {
   id: string
@@ -10,6 +14,11 @@ export type Character = {
   mana: number
   abilities: Ability[]
   description: string
+  // Contract-specific fields
+  contractInstanceId?: number
+  characterTypeId?: number
+  level?: number
+  experience?: number
 }
 
 export type Ability = {
@@ -35,6 +44,13 @@ export type Enemy = {
 }
 
 type GameState = {
+  // Contract Data
+  contractCharacterTypes: CharacterType[]
+  ownedCharacters: CharacterInstance[]
+  isLoadingContract: boolean
+  contractError: string | null
+  
+  // Game State
   score: number
   highScore: number
   level: number
@@ -51,7 +67,13 @@ type GameState = {
   inventory: string[]
   achievements: string[]
   battleLog: string[]
+  currentMatchId: number | null
+  
+  // Actions
   selectCharacter: (character: Character) => void
+  selectContractCharacter: (characterInstance: CharacterInstance) => Promise<void>
+  acquireNewCharacter: (characterTypeId: number) => Promise<string>
+  levelUpCharacter: (characterInstanceId: number) => Promise<string>
   increaseScore: (amount: number) => void
   increaseGold: (amount: number) => void
   updatePlayerHealth: (amount: number) => void
@@ -63,6 +85,7 @@ type GameState = {
   resetGame: () => void
   levelUp: () => void
   gainExperience: (amount: number) => void
+  refreshContractData: () => Promise<void>
 }
 
 const GameStateContext = createContext<GameState | undefined>(undefined)
@@ -75,205 +98,148 @@ export const useGameState = () => {
   return context
 }
 
-const CHARACTERS: Character[] = [
-  {
-    id: "chronos",
-    name: "Chronos",
-    avatar: "/images/chronos.png",
-    health: 100,
-    mana: 100,
-    description: "Master of time with powerful temporal abilities",
-    abilities: [
-      {
-        id: "time-slash",
-        name: "Time Slash",
-        damage: 15,
-        manaCost: 10,
-        cooldown: 1,
-        currentCooldown: 0,
-        type: "time",
-        description: "A quick slash that cuts through time",
-        soundEffect: "time-slash.mp3",
-      },
-      {
-        id: "temporal-blast",
-        name: "Temporal Blast",
-        damage: 30,
-        manaCost: 25,
-        cooldown: 3,
-        currentCooldown: 0,
-        type: "time",
-        description: "A powerful blast of temporal energy",
-        soundEffect: "temporal-blast.mp3",
-      },
-      {
-        id: "time-freeze",
-        name: "Time Freeze",
-        damage: 20,
-        manaCost: 40,
-        cooldown: 5,
-        currentCooldown: 0,
-        type: "time",
-        description: "Freezes time around the enemy",
-        soundEffect: "time-freeze.mp3",
-      },
-    ],
-  },
-  {
-    id: "pyromancer",
-    name: "Pyromancer",
-    avatar: "/images/pyromancer.png",
-    health: 85,
-    mana: 120,
-    description: "Wields the destructive power of fire",
-    abilities: [
-      {
-        id: "fireball",
-        name: "Fireball",
-        damage: 20,
-        manaCost: 15,
-        cooldown: 1,
-        currentCooldown: 0,
-        type: "fire",
-        description: "Launches a ball of fire at the enemy",
-        soundEffect: "fireball.mp3",
-      },
-      {
-        id: "flame-wave",
-        name: "Flame Wave",
-        damage: 35,
-        manaCost: 30,
-        cooldown: 3,
-        currentCooldown: 0,
-        type: "fire",
-        description: "Sends a wave of fire toward the enemy",
-        soundEffect: "flame-wave.mp3",
-      },
-      {
-        id: "inferno",
-        name: "Inferno",
-        damage: 50,
-        manaCost: 45,
-        cooldown: 5,
-        currentCooldown: 0,
-        type: "fire",
-        description: "Summons a raging inferno to engulf the enemy",
-        soundEffect: "inferno.mp3",
-      },
-    ],
-  },
-  {
-    id: "stormcaller",
-    name: "Stormcaller",
-    avatar: "/images/stormcaller.png",
-    health: 90,
-    mana: 110,
-    description: "Commands the power of lightning and storms",
-    abilities: [
-      {
-        id: "lightning-bolt",
-        name: "Lightning Bolt",
-        damage: 18,
-        manaCost: 12,
-        cooldown: 1,
-        currentCooldown: 0,
-        type: "lightning",
-        description: "Strikes the enemy with a bolt of lightning",
-        soundEffect: "lightning-bolt.mp3",
-      },
-      {
-        id: "chain-lightning",
-        name: "Chain Lightning",
-        damage: 28,
-        manaCost: 25,
-        cooldown: 3,
-        currentCooldown: 0,
-        type: "lightning",
-        description: "Lightning that jumps between multiple targets",
-        soundEffect: "chain-lightning.mp3",
-      },
-      {
-        id: "thunderstorm",
-        name: "Thunderstorm",
-        damage: 45,
-        manaCost: 40,
-        cooldown: 5,
-        currentCooldown: 0,
-        type: "lightning",
-        description: "Calls down a devastating storm of lightning",
-        soundEffect: "thunderstorm.mp3",
-      },
-    ],
-  },
-]
+// Convert contract character instance to game character format
+const convertContractCharacterToGameCharacter = (
+  characterInstance: CharacterInstance,
+  characterType: CharacterType
+): Character => {
+  const abilities: Ability[] = characterType.abilities.map((ability, index) => ({
+    id: `ability_${index}`,
+    name: ability.name,
+    damage: ability.baseDamage,
+    manaCost: ability.manaCost,
+    cooldown: ability.cooldown,
+    currentCooldown: 0,
+    type: getAbilityType(ability.name),
+    description: getAbilityDescription(ability.name),
+    soundEffect: getAbilitySoundEffect(ability.name)
+  }))
 
-const ENEMIES: Enemy[] = [
-  {
-    id: "time-wraith",
-    name: "Time Wraith",
-    avatar: "/images/time-wraith.png",
-    health: 80,
-    maxHealth: 80,
-    level: 1,
-    abilities: [
-      {
-        id: "temporal-drain",
-        name: "Temporal Drain",
-        damage: 10,
-        manaCost: 0,
-        cooldown: 0,
-        currentCooldown: 0,
-        type: "time",
-        description: "Drains temporal energy",
-        soundEffect: "temporal-drain.mp3",
-      },
-    ],
-  },
-  {
-    id: "flame-elemental",
-    name: "Flame Elemental",
-    avatar: "/images/flame-elemental.png",
-    health: 100,
-    maxHealth: 100,
-    level: 2,
-    abilities: [
-      {
-        id: "fire-touch",
-        name: "Fire Touch",
-        damage: 15,
-        manaCost: 0,
-        cooldown: 0,
-        currentCooldown: 0,
-        type: "fire",
-        description: "Burns with a fiery touch",
-        soundEffect: "fire-touch.mp3",
-      },
-    ],
-  },
-  {
-    id: "chrono-guardian",
-    name: "Chrono Guardian",
-    avatar: "/images/chrono-guardian.png",
-    health: 150,
-    maxHealth: 150,
-    level: 3,
-    abilities: [
-      {
-        id: "time-crush",
-        name: "Time Crush",
-        damage: 20,
-        manaCost: 0,
-        cooldown: 0,
-        currentCooldown: 0,
-        type: "time",
-        description: "Crushes with the weight of time",
-        soundEffect: "time-crush.mp3",
-      },
-    ],
-  },
-]
+  return {
+    id: `contract_${characterInstance.id}`,
+    name: characterInstance.characterTypeName,
+    avatar: getCharacterAvatar(characterInstance.characterTypeName),
+    health: characterInstance.health,
+    mana: characterInstance.mana,
+    abilities,
+    description: characterType.description,
+    contractInstanceId: characterInstance.id,
+    characterTypeId: characterInstance.characterTypeId,
+    level: characterInstance.level,
+    experience: characterInstance.experience
+  }
+}
+
+// Helper functions for character data mapping
+const getAbilityType = (abilityName: string): "fire" | "ice" | "lightning" | "time" | "physical" => {
+  const name = abilityName.toLowerCase()
+  if (name.includes('fire') || name.includes('flame') || name.includes('burn')) return 'fire'
+  if (name.includes('ice') || name.includes('frost') || name.includes('freeze')) return 'ice'
+  if (name.includes('lightning') || name.includes('thunder') || name.includes('bolt')) return 'lightning'
+  if (name.includes('time') || name.includes('temporal') || name.includes('age')) return 'time'
+  return 'physical'
+}
+
+const getAbilityDescription = (abilityName: string): string => {
+  const descriptions: Record<string, string> = {
+    'Lightning Bolt': 'Strikes the enemy with a powerful bolt of lightning',
+    'Thunderstorm': 'Calls down a devastating storm of lightning',
+    'Heaven\'s Wrath': 'Divine lightning that pierces through defenses',
+    'Divine Restoration': 'Restores health with divine energy',
+    'Spear Thrust': 'A precise thrust with Athena\'s spear',
+    'Aegis Shield': 'Protective barrier that absorbs damage',
+    'Judgment Strike': 'A righteous strike that deals extra damage',
+    'Wisdom\'s Blessing': 'Restores mana and provides tactical advantage',
+    'Soulfire': 'Dark flames that burn the enemy\'s soul',
+    'Underworld Grasp': 'Tendrils from the underworld that drain life',
+    'Hellfire Surge': 'A surge of hellfire that burns everything',
+    'Soul Drain': 'Drains the enemy\'s life force',
+    'Shadowbind': 'Binds the enemy in shadows',
+    'Eclipse Nova': 'A devastating explosion of dark energy',
+    'Veil of Night': 'Shrouds the battlefield in darkness',
+    'Night\'s Embrace': 'Healing embrace of the night'
+  }
+  return descriptions[abilityName] || `A powerful ${abilityName.toLowerCase()} attack`
+}
+
+const getAbilitySoundEffect = (abilityName: string): string => {
+  const name = abilityName.toLowerCase()
+  if (name.includes('lightning') || name.includes('thunder') || name.includes('bolt')) return 'lightning-ability.mp3'
+  if (name.includes('fire') || name.includes('flame') || name.includes('burn')) return 'fire-ability.mp3'
+  if (name.includes('time') || name.includes('temporal')) return 'time-ability.mp3'
+  if (name.includes('shield') || name.includes('restoration') || name.includes('blessing')) return 'heal-ability.mp3'
+  return 'ability.mp3'
+}
+
+const getCharacterAvatar = (characterName: string): string => {
+  const avatars: Record<string, string> = {
+    'Zeus': '/images/zeus.png',
+    'Athena': '/images/athena.png',
+    'Hades': '/images/hades.png',
+    'Nyx': '/images/nyx.png'
+  }
+  return avatars[characterName] || '/images/default-character.png'
+}
+
+// Generate enemy based on level (updated for contract integration)
+const generateContractEnemy = (level: number): Enemy => {
+  const enemyTypes = [
+    {
+      name: "Time Corrupted Warrior",
+      baseHealth: 80,
+      abilities: [
+        { id: "temporal_strike", name: "Temporal Strike", damage: 15, manaCost: 10, cooldown: 1, currentCooldown: 0, type: "time" as const, description: "A strike that warps time", soundEffect: "time-ability.mp3" },
+        { id: "time_drain", name: "Time Drain", damage: 25, manaCost: 20, cooldown: 3, currentCooldown: 0, type: "time" as const, description: "Drains temporal energy", soundEffect: "time-ability.mp3" }
+      ]
+    },
+    {
+      name: "Lightning Elemental",
+      baseHealth: 70,
+      abilities: [
+        { id: "shock", name: "Shock", damage: 20, manaCost: 12, cooldown: 1, currentCooldown: 0, type: "lightning" as const, description: "Electric shock attack", soundEffect: "lightning-ability.mp3" },
+        { id: "chain_lightning", name: "Chain Lightning", damage: 30, manaCost: 25, cooldown: 4, currentCooldown: 0, type: "lightning" as const, description: "Lightning that chains between targets", soundEffect: "lightning-ability.mp3" }
+      ]
+    },
+    {
+      name: "Flame Wraith",
+      baseHealth: 75,
+      abilities: [
+        { id: "fire_burst", name: "Fire Burst", damage: 18, manaCost: 15, cooldown: 2, currentCooldown: 0, type: "fire" as const, description: "Burst of magical flames", soundEffect: "fire-ability.mp3" },
+        { id: "inferno", name: "Inferno", damage: 35, manaCost: 30, cooldown: 5, currentCooldown: 0, type: "fire" as const, description: "Raging inferno attack", soundEffect: "fire-ability.mp3" }
+      ]
+    }
+  ]
+
+  const randomIndex = Math.floor(Math.random() * enemyTypes.length)
+  const enemyType = enemyTypes[randomIndex]
+  
+  const scaleFactor = 1 + (level - 1) * 0.15
+  const health = Math.floor(enemyType.baseHealth * scaleFactor)
+
+  return {
+    id: `enemy_${Date.now()}`,
+    name: enemyType.name,
+    avatar: `/images/enemy-${randomIndex + 1}.png`,
+    health,
+    maxHealth: health,
+    abilities: enemyType.abilities,
+    level
+  }
+}
 
 export function GameStateProvider({ children }: { children: ReactNode }) {
+  const { address } = useAccount()
+  const {
+    characterTypes: contractCharacterTypes,
+    ownedCharacters,
+    isLoading: isLoadingContract,
+    error: contractError,
+    acquireCharacter,
+    levelUpCharacter: contractLevelUpCharacter,
+    refreshData
+  } = useContract()
+
+  // Game state
   const [score, setScore] = useState(0)
   const [highScore, setHighScore] = useState(0)
   const [level, setLevel] = useState(1)
@@ -290,55 +256,173 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
   const [inventory, setInventory] = useState<string[]>([])
   const [achievements, setAchievements] = useState<string[]>([])
   const [battleLog, setBattleLog] = useState<string[]>([])
+  const [currentMatchId, setCurrentMatchId] = useState<number | null>(null)
 
-  // Load saved game state from localStorage
+  // Load saved game state
   useEffect(() => {
     const savedHighScore = localStorage.getItem("chronoClash_highScore")
     if (savedHighScore) {
       setHighScore(Number.parseInt(savedHighScore))
     }
+
+    const savedGameData = localStorage.getItem("chronoClash_gameData")
+    if (savedGameData) {
+      try {
+        const data = JSON.parse(savedGameData)
+        setScore(data.score || 0)
+        setLevel(data.level || 1)
+        setGold(data.gold || 0)
+        setExperience(data.experience || 0)
+        setPlayerLevel(data.playerLevel || 1)
+        setInventory(data.inventory || [])
+        setAchievements(data.achievements || [])
+      } catch (error) {
+        console.error('Error loading saved game data:', error)
+      }
+    }
   }, [])
 
-  // Save high score to localStorage when it changes
+  // Save game state when it changes
   useEffect(() => {
     localStorage.setItem("chronoClash_highScore", highScore.toString())
-  }, [highScore])
+    
+    const gameData = {
+      score,
+      level,
+      gold,
+      experience,
+      playerLevel,
+      inventory,
+      achievements
+    }
+    localStorage.setItem("chronoClash_gameData", JSON.stringify(gameData))
+  }, [score, highScore, level, gold, experience, playerLevel, inventory, achievements])
 
-  const selectCharacter = (character: Character) => {
+  // Auto-generate enemy when level changes
+  useEffect(() => {
+    if (level > 0 && !currentEnemy) {
+      setCurrentEnemy(generateContractEnemy(level))
+    }
+  }, [level, currentEnemy])
+
+  const selectCharacter = useCallback((character: Character) => {
     setSelectedCharacter(character)
-    setPlayerHealth(character.health)
-    setPlayerMaxHealth(character.health)
-    setPlayerMana(character.mana)
-    setPlayerMaxMana(character.mana)
+    
+    // Set player stats based on character
+    const maxHealth = character.health
+    const maxMana = character.mana
+    
+    setPlayerHealth(maxHealth)
+    setPlayerMaxHealth(maxHealth)
+    setPlayerMana(maxMana)
+    setPlayerMaxMana(maxMana)
 
-    // Set initial enemy based on level
-    const enemy = { ...ENEMIES[0] }
-    setCurrentEnemy(enemy)
-  }
+    // Generate initial enemy if none exists
+    if (!currentEnemy) {
+      setCurrentEnemy(generateContractEnemy(level))
+    }
+  }, [level, currentEnemy])
 
-  const increaseScore = (amount: number) => {
+  const selectContractCharacter = useCallback(async (characterInstance: CharacterInstance) => {
+    try {
+      // Find the character type
+      const characterType = contractCharacterTypes.find(
+        type => type.id === characterInstance.characterTypeId
+      )
+      
+      if (!characterType) {
+        throw new Error('Character type not found')
+      }
+
+      // Convert to game character format
+      const gameCharacter = convertContractCharacterToGameCharacter(characterInstance, characterType)
+      
+      // Select the character
+      selectCharacter(gameCharacter)
+      
+      addToBattleLog(`Selected ${gameCharacter.name} (Level ${gameCharacter.level})`)
+    } catch (error) {
+      console.error('Error selecting contract character:', error)
+      addToBattleLog('Error selecting character')
+    }
+  }, [contractCharacterTypes, selectCharacter])
+
+  const acquireNewCharacter = useCallback(async (characterTypeId: number): Promise<string> => {
+    try {
+      // Call the contract function and get the transaction hash
+      const hash = await acquireCharacter(characterTypeId)
+      
+      addToBattleLog('Character acquired successfully!')
+      
+      // Return the transaction hash (Hash type from viem is a string)
+      return hash
+      
+    } catch (error) {
+      console.error('Error acquiring character:', error)
+      addToBattleLog('Failed to acquire character')
+      throw error
+    }
+  }, [acquireCharacter])
+
+  const levelUpCharacter = useCallback(async (characterInstanceId: number): Promise<string> => {
+    try {
+      // Call the contract function and get the transaction hash
+      const hash = await contractLevelUpCharacter(characterInstanceId)
+      
+      addToBattleLog('Character leveled up successfully!')
+      
+      // Update selected character if it was leveled up
+      if (selectedCharacter?.contractInstanceId === characterInstanceId) {
+        // Refresh will happen automatically after transaction confirmation in useContract
+        // But we can manually trigger a refresh here if needed
+        setTimeout(async () => {
+          await refreshData()
+          
+          // Find the updated character instance
+          const updatedInstance = ownedCharacters.find(char => char.id === characterInstanceId)
+          if (updatedInstance) {
+            const characterType = contractCharacterTypes.find(
+              type => type.id === updatedInstance.characterTypeId
+            )
+            if (characterType) {
+              const updatedGameCharacter = convertContractCharacterToGameCharacter(updatedInstance, characterType)
+              selectCharacter(updatedGameCharacter)
+            }
+          }
+        }, 1000)
+      }
+      
+      // Return the transaction hash (Hash type from viem is a string)
+      return hash
+      
+    } catch (error) {
+      console.error('Error leveling up character:', error)
+      addToBattleLog('Failed to level up character')
+      throw error
+    }
+  }, [contractLevelUpCharacter, selectedCharacter, refreshData, ownedCharacters, contractCharacterTypes, selectCharacter])
+
+  const increaseScore = useCallback((amount: number) => {
     const newScore = score + amount
     setScore(newScore)
     if (newScore > highScore) {
       setHighScore(newScore)
     }
-  }
+  }, [score, highScore])
 
-  const increaseGold = (amount: number) => {
-    setGold(gold + amount)
-  }
+  const increaseGold = useCallback((amount: number) => {
+    setGold(prev => prev + amount)
+  }, [])
 
-  const updatePlayerHealth = (amount: number) => {
-    const newHealth = Math.min(playerMaxHealth, Math.max(0, playerHealth + amount))
-    setPlayerHealth(newHealth)
-  }
+  const updatePlayerHealth = useCallback((amount: number) => {
+    setPlayerHealth(prev => Math.min(playerMaxHealth, Math.max(0, prev + amount)))
+  }, [playerMaxHealth])
 
-  const updatePlayerMana = (amount: number) => {
-    const newMana = Math.min(playerMaxMana, Math.max(0, playerMana + amount))
-    setPlayerMana(newMana)
-  }
+  const updatePlayerMana = useCallback((amount: number) => {
+    setPlayerMana(prev => Math.min(playerMaxMana, Math.max(0, prev + amount)))
+  }, [playerMaxMana])
 
-  const damageEnemy = (amount: number) => {
+  const damageEnemy = useCallback((amount: number) => {
     if (currentEnemy) {
       const newHealth = Math.max(0, currentEnemy.health - amount)
       setCurrentEnemy({
@@ -346,17 +430,17 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
         health: newHealth,
       })
     }
-  }
+  }, [currentEnemy])
 
-  const addToBattleLog = (message: string) => {
-    setBattleLog((prev) => [...prev, message])
-  }
+  const addToBattleLog = useCallback((message: string) => {
+    setBattleLog(prev => [...prev, message].slice(-50)) // Keep last 50 messages
+  }, [])
 
-  const resetBattleLog = () => {
+  const resetBattleLog = useCallback(() => {
     setBattleLog([])
-  }
+  }, [])
 
-  const resetGame = () => {
+  const resetGame = useCallback(() => {
     setScore(0)
     setLevel(1)
     setGold(0)
@@ -371,18 +455,22 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     setPlayerLevel(1)
     setInventory([])
     setBattleLog([])
-  }
+    setCurrentMatchId(null)
+  }, [])
 
-  const levelUp = () => {
-    setPlayerLevel(playerLevel + 1)
-    setPlayerMaxHealth((prevMax) => Math.floor(prevMax * 1.2))
-    setPlayerHealth((prevMax) => Math.floor(prevMax * 1.2))
-    setPlayerMaxMana((prevMax) => Math.floor(prevMax * 1.1))
-    setPlayerMana((prevMax) => Math.floor(prevMax * 1.1))
-    setExperienceToNextLevel((prev) => Math.floor(prev * 1.5))
-  }
+  const levelUp = useCallback(() => {
+    const newLevel = playerLevel + 1
+    setPlayerLevel(newLevel)
+    setPlayerMaxHealth(prev => Math.floor(prev * 1.2))
+    setPlayerHealth(prev => Math.floor(prev * 1.2))
+    setPlayerMaxMana(prev => Math.floor(prev * 1.1))
+    setPlayerMana(prev => Math.floor(prev * 1.1))
+    setExperienceToNextLevel(prev => Math.floor(prev * 1.5))
+    
+    addToBattleLog(`Level up! You are now level ${newLevel}`)
+  }, [playerLevel, addToBattleLog])
 
-  const gainExperience = (amount: number) => {
+  const gainExperience = useCallback((amount: number) => {
     const newExperience = experience + amount
     if (newExperience >= experienceToNextLevel) {
       setExperience(newExperience - experienceToNextLevel)
@@ -390,41 +478,61 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     } else {
       setExperience(newExperience)
     }
+  }, [experience, experienceToNextLevel, levelUp])
+
+  const refreshContractData = useCallback(async () => {
+    if (address) {
+      await refreshData()
+    }
+  }, [address, refreshData])
+
+  const contextValue: GameState = {
+    // Contract Data
+    contractCharacterTypes,
+    ownedCharacters,
+    isLoadingContract,
+    contractError,
+    
+    // Game State
+    score,
+    highScore,
+    level,
+    gold,
+    selectedCharacter,
+    currentEnemy,
+    playerHealth,
+    playerMaxHealth,
+    playerMana,
+    playerMaxMana,
+    experience,
+    experienceToNextLevel,
+    playerLevel,
+    inventory,
+    achievements,
+    battleLog,
+    currentMatchId,
+    
+    // Actions
+    selectCharacter,
+    selectContractCharacter,
+    acquireNewCharacter,
+    levelUpCharacter,
+    increaseScore,
+    increaseGold,
+    updatePlayerHealth,
+    updatePlayerMana,
+    setCurrentEnemy,
+    damageEnemy,
+    addToBattleLog,
+    resetBattleLog,
+    resetGame,
+    levelUp,
+    gainExperience,
+    refreshContractData
   }
 
   return (
-    <GameStateContext.Provider
-      value={{
-        score,
-        highScore,
-        level,
-        gold,
-        selectedCharacter,
-        currentEnemy,
-        playerHealth,
-        playerMaxHealth,
-        playerMana,
-        playerMaxMana,
-        experience,
-        experienceToNextLevel,
-        playerLevel,
-        inventory,
-        achievements,
-        battleLog,
-        selectCharacter,
-        increaseScore,
-        increaseGold,
-        updatePlayerHealth,
-        updatePlayerMana,
-        setCurrentEnemy,
-        damageEnemy,
-        addToBattleLog,
-        resetBattleLog,
-        resetGame,
-        levelUp,
-        gainExperience,
-      }}
-    >
+    <GameStateContext.Provider value={contextValue}>
       {children}
     </GameStateContext.Provider>
   )

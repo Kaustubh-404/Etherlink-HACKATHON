@@ -1,4 +1,4 @@
-// lib/socket-service.ts (Updated for Phase 2)
+// lib/socket-service.ts - Fix: Make emit method public
 import { type ContractCharacter } from './game-types'
 import type { Address } from 'viem'
 
@@ -20,7 +20,7 @@ export interface RoomData {
   // Contract-specific fields
   contractMatchId?: number
   stakeAmount?: string
-  gameData?: {
+  gameData: {
     currentTurn?: string
     turnCount: number
     winner?: string
@@ -90,7 +90,8 @@ class MockSocketService {
     }
   }
 
-  private emit(eventName: string, data: any): void {
+  // FIX: Make emit method public
+  public emit(eventName: string, data: any): void {
     const listeners = this.eventListeners.get(eventName)
     if (listeners) {
       listeners.forEach(listener => {
