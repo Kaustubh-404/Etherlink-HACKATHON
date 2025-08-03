@@ -1,4 +1,4 @@
-// lib/web3-config.ts
+// lib/web3-config.ts (Updated for Phase 2)
 import { createConfig, http } from 'wagmi'
 import { mainnet, sepolia } from 'wagmi/chains'
 import { injected, metaMask, walletConnect } from 'wagmi/connectors'
@@ -14,10 +14,10 @@ export const etherlink = {
   },
   rpcUrls: {
     default: {
-      http: ['https://node.ghostnet.etherlink.com'],
+      http: [process.env.NEXT_PUBLIC_ETHERLINK_RPC_URL || 'https://node.ghostnet.etherlink.com'],
     },
     public: {
-      http: ['https://node.ghostnet.etherlink.com'],
+      http: [process.env.NEXT_PUBLIC_ETHERLINK_RPC_URL || 'https://node.ghostnet.etherlink.com'],
     },
   },
   blockExplorers: {
@@ -37,32 +37,11 @@ export const config = createConfig({
     }),
   ],
   transports: {
-    [etherlink.id]: http(),
+    [etherlink.id]: http(process.env.NEXT_PUBLIC_ETHERLINK_RPC_URL),
     [sepolia.id]: http(),
     [mainnet.id]: http(),
   },
 })
 
-// Contract Configuration
-export const CONTRACT_CONFIG = {
-  address: '0x7B80B5f84C84F2DfC4846938e8B1b3283d75453a' as `0x${string}`,
-  chainId: etherlink.id,
-  abi: [
-    // We'll add the full ABI here once provided
-    {
-      "inputs": [{"internalType": "uint256", "name": "_characterTypeId", "type": "uint256"}],
-      "name": "acquireCharacter",
-      "outputs": [],
-      "stateMutability": "payable",
-      "type": "function"
-    },
-    {
-      "inputs": [{"internalType": "uint256", "name": "_characterInstanceId", "type": "uint256"}],
-      "name": "initiateMatch",
-      "outputs": [],
-      "stateMutability": "payable",
-      "type": "function"
-    },
-    // Add more ABI functions as needed
-  ] as const,
-}
+// Export chain for external use
+export { etherlink as defaultChain }
