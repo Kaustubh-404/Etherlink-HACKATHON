@@ -69,9 +69,28 @@ export default function GasEstimation({
         }
       } catch (err: any) {
         console.error('Gas estimation failed:', err)
-        setError(err.message || 'Failed to estimate gas')
-        setGasEstimate(null)
-        setGasCost("")
+        
+        // Check if this is an OutOfFund error
+        if (err.message.includes('OutOfFund') || 
+            err.message.includes('Request exceeds defined limit') ||
+            err.message.includes('insufficient funds')) {
+          
+          // Provide a fallback estimate for insufficient funds scenarios
+          const fallbackGasEstimate = 100000n // Conservative estimate
+          const fallbackCost = Web3Utils.formatEth(fallbackGasEstimate * gasPrice)
+          
+          setGasEstimate(fallbackGasEstimate)
+          setGasCost(fallbackCost)
+          setError('Cannot estimate exact gas due to insufficient funds. Showing conservative estimate.')
+          
+          if (onEstimationComplete) {
+            onEstimationComplete(fallbackGasEstimate, fallbackCost)
+          }
+        } else {
+          setError(err.message || 'Failed to estimate gas')
+          setGasEstimate(null)
+          setGasCost("")
+        }
       } finally {
         setIsLoading(false)
       }
@@ -197,8 +216,21 @@ export default function GasEstimation({
         <Alert variant="destructive" className="text-xs py-2">
           <AlertCircle className="h-3 w-3" />
           <AlertDescription>
-            Insufficient balance. You need ~{Web3Utils.formatEth(gasEstimate * gasPrice + (value || 0n))} ETH 
-            but only have {getFormattedBalance()} ETH.
+            <div className="space-y-1">
+              <div className="font-medium">Insufficient Balance</div>
+              <div>
+                Required: ~{Web3Utils.formatEth(gasEstimate * gasPrice + (value || 0n))} ETH
+                {value && (
+                  <div className="text-xs opacity-80">
+                    (Gas: ~{Web3Utils.formatEth(gasEstimate * gasPrice)} ETH + Stake: {Web3Utils.formatEth(value)} ETH)
+                  </div>
+                )}
+              </div>
+              <div>Available: {getFormattedBalance()} ETH</div>
+              <div className="text-xs opacity-80">
+                Please add more ETH to your wallet before proceeding.
+              </div>
+            </div>
           </AlertDescription>
         </Alert>
       )}

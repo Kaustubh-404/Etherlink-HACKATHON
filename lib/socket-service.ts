@@ -34,6 +34,7 @@ export interface RoomData {
 class MockSocketService {
   private connected: boolean = false
   private playerId: string = ''
+  private playerName: string | null = null
   private eventListeners: Map<string, Function[]> = new Map()
   private rooms: Map<string, RoomData> = new Map()
   private availableRooms: RoomData[] = []
@@ -65,6 +66,10 @@ class MockSocketService {
 
   getPlayerId(): string {
     return this.playerId
+  }
+
+  setPlayerName(name: string): void {
+    this.playerName = name
   }
 
   // Event handling
@@ -172,7 +177,7 @@ class MockSocketService {
     // Add player to room
     room.players.push(this.playerId)
     room.guestId = this.playerId
-    room.guestName = this.playerId
+    room.guestName = this.playerName || this.playerId // Use actual player name
 
     // Update room in storage
     this.rooms.set(roomId, room)
@@ -188,7 +193,7 @@ class MockSocketService {
       this.emit('room_joined', { room })
       this.emit('player_joined', { 
         playerId: this.playerId, 
-        playerName: this.playerId 
+        playerName: this.playerName || this.playerId // Use actual player name
       })
     }, 500)
   }

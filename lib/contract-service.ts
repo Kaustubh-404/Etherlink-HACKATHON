@@ -440,34 +440,56 @@ export class ContractService {
   }
 
   /**
-   * Estimate gas for a transaction
+   * Estimate gas for a contract function call
    */
   async estimateGas(
-    functionName: string,
-    args: readonly any[],
-    value?: bigint,
+    functionName: string, 
+    args: readonly any[], 
+    value?: bigint, 
     account?: Address
   ): Promise<bigint> {
-    try {
-      if (!account && this.walletClient) {
-        const [walletAccount] = await this.walletClient.getAddresses()
-        account = walletAccount
+    const maxRetries = 2;
+    let lastError: any;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (!account && this.walletClient) {
+          const [walletAccount] = await this.walletClient.getAddresses()
+          account = walletAccount
+        }
+
+        const gasEstimate = await this.publicClient.estimateContractGas({
+          address: CONTRACT_ADDRESS,
+          abi: BATTLE_ARENA_ABI,
+          functionName: functionName as any,
+          args: args as any,
+          account,
+          value: value as any
+        })
+
+        return Web3Utils.addGasBuffer(gasEstimate)
+      } catch (error) {
+        lastError = error
+        console.error(`Gas estimation attempt ${attempt + 1} failed:`, error)
+        
+        // Don't retry on OutOfFund errors - these are definitive
+        if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+          if (error.message.includes('OutOfFund') || 
+              error.message.includes('insufficient funds') ||
+              error.message.includes('Request exceeds defined limit')) {
+            break; // Don't retry these errors
+          }
+        }
+        
+        // Wait before retrying (except on last attempt)
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)))
+        }
       }
-
-      const gasEstimate = await this.publicClient.estimateContractGas({
-        address: CONTRACT_ADDRESS,
-        abi: BATTLE_ARENA_ABI,
-        functionName: functionName as any,
-        args: args as any,
-        account,
-        value: value as any
-      })
-
-      return Web3Utils.addGasBuffer(gasEstimate)
-    } catch (error) {
-      console.error('Error estimating gas:', error)
-      throw new Error(Web3Utils.parseContractError(error))
     }
+
+    console.error('All gas estimation attempts failed:', lastError)
+    throw new Error(Web3Utils.parseContractError(lastError))
   }
 
   /**

@@ -51,9 +51,9 @@ export default function MultiplayerBattleRoom({ onBack, onCharacterSelect, onSta
   // Check if opponent has selected a character
   const opponentHasSelectedCharacter = !!opponentCharacter
   
-  // Check if both players are ready
-  const bothPlayersReady = playerReady && opponentReady
-  const canStartBattle = bothPlayersReady && hasSelectedCharacter && opponentHasSelectedCharacter
+  // Auto-start when both players have selected characters
+  const bothPlayersHaveCharacters = hasSelectedCharacter && opponentHasSelectedCharacter
+  const canStartBattle = bothPlayersHaveCharacters
 
   // Setup event listeners for game state updates
   useEffect(() => {
@@ -111,6 +111,19 @@ export default function MultiplayerBattleRoom({ onBack, onCharacterSelect, onSta
     }
   }, [startCountdown]);
   
+  // Auto-start battle when both players have characters
+  useEffect(() => {
+    if (bothPlayersHaveCharacters && !battleStarting && !startCountdown) {
+      console.log("Both players have characters, auto-starting battle...");
+      const timer = setTimeout(() => {
+        if (isHost) {
+          startBattle();
+        }
+      }, 2000); // 2 second delay before auto-start
+      
+      return () => clearTimeout(timer);
+    }
+  }, [bothPlayersHaveCharacters, battleStarting, startCountdown, isHost, startBattle]);
 
   // Handle character selection
   const handleSelectCharacter = () => {
@@ -118,32 +131,7 @@ export default function MultiplayerBattleRoom({ onBack, onCharacterSelect, onSta
     onCharacterSelect();
   };
 
-  // Handle ready status
-  const handleSetReady = () => {
-    playSound("button-click.mp3");
-    
-    if (!hasSelectedCharacter) {
-      setError("You must select a character first");
-      return;
-    }
-    
-    setPlayerReady(true);
-    setReady(true);
-  };
-
-  // Handle start battle (host only)
-  const handleStartBattle = () => {
-    if (!isHost) return;
-    
-    playSound("button-click.mp3");
-    
-    if (!canStartBattle) {
-      setError("Both players must be ready to start");
-      return;
-    }
-    
-    startBattle();
-  };
+  // Auto-battle will start when both players have characters
 
   // Handle leave room
   const handleLeaveRoom = () => {
@@ -282,13 +270,9 @@ export default function MultiplayerBattleRoom({ onBack, onCharacterSelect, onSta
                   </div>
                 </div>
                 
-                <Button
-                  onClick={handleSetReady}
-                  disabled={playerReady || battleStarting}
-                  className={`mt-4 w-full ${playerReady ? 'bg-green-600' : 'bg-yellow-600 hover:bg-yellow-700'}`}
-                >
-                  {playerReady ? "Ready!" : "Ready"}
-                </Button>
+                <div className="mt-4 w-full bg-green-600 py-2 rounded text-center text-white font-medium">
+                  Character Selected - Ready for Battle!
+                </div>
               </div>
             ) : (
               <div className="text-center py-8">
@@ -310,9 +294,7 @@ export default function MultiplayerBattleRoom({ onBack, onCharacterSelect, onSta
               <p className="text-gray-400 text-sm">
                 {!hasSelectedCharacter || !opponentHasSelectedCharacter
                   ? "Waiting for both players to select characters"
-                  : !bothPlayersReady
-                    ? "Waiting for players to ready up"
-                    : "Both players ready! Battle starting soon..."}
+                  : "Both players ready! Battle starting soon..."}
               </p>
             </div>
 
@@ -322,11 +304,6 @@ export default function MultiplayerBattleRoom({ onBack, onCharacterSelect, onSta
                 <div className="text-center text-gray-500">
                   <Clock className="h-12 w-12 mx-auto mb-2 animate-pulse" />
                   <p>Waiting for players...</p>
-                </div>
-              ) : !bothPlayersReady ? (
-                <div className="text-center text-yellow-500">
-                  <Sword className="h-12 w-12 mx-auto mb-2 animate-pulse" />
-                  <p>Get ready for battle!</p>
                 </div>
               ) : (
                 <div className="text-center text-red-500">
@@ -363,14 +340,12 @@ export default function MultiplayerBattleRoom({ onBack, onCharacterSelect, onSta
             </div>
 
             <div className="mt-4 flex flex-col gap-2">
-              {isHost && canStartBattle && (
-                <Button 
-                  onClick={handleStartBattle}
-                  className="bg-green-600 hover:bg-green-700 w-full"
-                  disabled={battleStarting}
-                >
-                  Start Battle
-                </Button>
+              {bothPlayersHaveCharacters && (
+                <div className="bg-green-600/20 border border-green-600/50 rounded-lg p-3 text-center">
+                  <p className="text-green-400 font-medium">
+                    🚀 Battle starting automatically in a few seconds...
+                  </p>
+                </div>
               )}
               
               <Button 
@@ -436,10 +411,8 @@ export default function MultiplayerBattleRoom({ onBack, onCharacterSelect, onSta
                   </div>
                 </div>
                 
-                <div className="mt-4 w-full bg-gray-800 rounded py-2 text-center">
-                  <span className={opponentReady ? "text-green-500" : "text-gray-500"}>
-                    {opponentReady ? "Ready!" : "Not Ready"}
-                  </span>
+                <div className="mt-4 w-full bg-green-600 rounded py-2 text-center text-white font-medium">
+                  Character Selected - Ready for Battle!
                 </div>
               </div>
             ) : currentRoom.guestId || !isHost ? (

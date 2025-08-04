@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { ArrowLeft, Copy, Users, RefreshCw, LogIn, Search, Coins, AlertTriangle } from "lucide-react"
 import { motion } from "framer-motion"
 import { useMultiplayer } from "./multiplayer-context-provider"
+import { useContractMultiplayer } from "./contract-multiplayer-provider"
 import { useGameState } from "./game-state-provider"
 import { useContract } from "@/hooks/use-contract"
 import { useWallet } from "@/hooks/use-wallet"
@@ -37,6 +38,16 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
     connectionError: contextConnectionError,
     joinContractMatch
   } = useMultiplayer()
+  
+  const {
+    joinRoom: joinContractRoom,
+    connect: connectContract,
+    isConnected: isContractConnected,
+    currentRoom: contractCurrentRoom
+  } = useContractMultiplayer()
+  
+  // Use the appropriate currentRoom based on context
+  const activeRoom = contractCurrentRoom || currentRoom
   
   const { ownedCharacters } = useGameState()
   const { 
@@ -152,21 +163,30 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
   useEffect(() => {
     const handleJoinSuccess = (e: Event) => {
       console.log("Room join success event received");
+      console.log("Contract current room:", contractCurrentRoom);
+      console.log("Regular current room:", currentRoom);
+      console.log("Active room:", activeRoom);
       setJoining(false);
       setJoiningContractMatch(false);
       
-      // If we get to this point, the room should be updated in the context
-      if (currentRoom && currentRoom.id) {
-        onRoomJoined(currentRoom.id);
+      // Use activeRoom which prioritizes contract room over regular room
+      if (activeRoom && activeRoom.id) {
+        console.log("Navigating to room:", activeRoom.id);
+        onRoomJoined(activeRoom.id);
       } else {
+        console.log("Active room not available, waiting for context update...");
         // Wait a short moment for the context to update
         setTimeout(() => {
-          if (currentRoom && currentRoom.id) {
-            onRoomJoined(currentRoom.id);
+          const updatedActiveRoom = contractCurrentRoom || currentRoom;
+          console.log("After timeout, active room:", updatedActiveRoom);
+          if (updatedActiveRoom && updatedActiveRoom.id) {
+            console.log("Navigating to room after delay:", updatedActiveRoom.id);
+            onRoomJoined(updatedActiveRoom.id);
           } else {
-            setError("Failed to get room data after joining");
+            console.error("Failed to get room data after joining - activeRoom is still null");
+            setError("Successfully joined contract match, but failed to navigate to battle room. Please refresh and try again.");
           }
-        }, 300);
+        }, 1000); // Increased timeout to 1 second
       }
     };
 
@@ -193,13 +213,13 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
       }, 15000);
     }
 
-    // Cleanup
+    // Cleanup event listeners on unmount
     return () => {
       window.removeEventListener("room_joined", handleJoinSuccess);
       window.removeEventListener("join_room_error", handleJoinError as EventListener);
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, [joining, onRoomJoined, currentRoom]);
+  }, [joining, onRoomJoined, activeRoom, contractCurrentRoom, currentRoom]); // Updated dependencies
 
   // Watch for room changes to detect joining
   useEffect(() => {
@@ -254,8 +274,30 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
       setError("Please enter a room code");
       return;
     }
+
+    // Validate character selection for all room types
+    if (ownedCharacters.length === 0) {
+      setError("You need to own a character to join battles");
+      return;
+    }
     
-    // Ensure we're connected
+    const trimmedRoomCode = roomCode.trim();
+    const selectedCharacter = ownedCharacters[selectedCharacterIndex];
+    
+    // Check if this is a contract room ID
+    if (trimmedRoomCode.startsWith("CONTRACT_")) {
+      // For contract rooms, use the contract multiplayer system
+      try {
+        await connectContract();
+        joinContractRoom(trimmedRoomCode, selectedCharacter.id);
+        return;
+      } catch (error: any) {
+        setError(error.message || "Failed to join contract room");
+        return;
+      }
+    }
+    
+    // Ensure we're connected for socket-based rooms
     const connected = await ensureConnection();
     if (!connected) return;
     
@@ -267,10 +309,10 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
     setJoining(true);
     setError(null);
     
-    console.log("Attempting to join room:", roomCode.trim());
+    console.log("Attempting to join socket room:", trimmedRoomCode, "with character:", selectedCharacter.characterTypeName);
     
-    // Attempt to join the room
-    joinRoom(roomCode.trim());
+    // Attempt to join the socket room
+    joinRoom(trimmedRoomCode);
   };
 
   // Phase 4: Join contract match
@@ -327,19 +369,44 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
       const hash = await joinContractMatch(matchId, selectedCharacter.id, stakeAmount);
       setTransactionHash(hash);
       
-      // Create/join the corresponding room
-      // This would typically be handled by the contract event system
-      // For now, we'll simulate joining a room
+      console.log("Contract join transaction successful:", hash);
+      
+      // The contract multiplayer provider will handle the room creation and navigation
+      // We don't need to navigate manually here since the join event will trigger it
+      
+      // However, add a fallback timeout in case event system fails
       setTimeout(() => {
-        setJoining(false);
-        setJoiningContractMatch(false);
-        // Navigate to the battle room
-        onRoomJoined(`MATCH_${matchId}`);
-      }, 3000);
+        if (joining || joiningContractMatch) {
+          console.log("Still in joining state after 8 seconds, forcing navigation...");
+          setJoining(false);
+          setJoiningContractMatch(false);
+          // Force navigation to the battle room
+          onRoomJoined(`CONTRACT_${matchId}`);
+        }
+      }, 8000); // 8 second fallback timeout
       
     } catch (contractError: any) {
       console.error("Failed to join contract match:", contractError);
-      setError(`Failed to join staked match: ${contractError.message}`);
+      
+      // Parse the error and provide user-friendly messages
+      let errorMessage = "Failed to join staked match";
+      
+      if (contractError.message) {
+        if (contractError.message.includes('OutOfFund') || 
+            contractError.message.includes('insufficient funds') ||
+            contractError.message.includes('Request exceeds defined limit')) {
+          errorMessage = `Insufficient funds. You need ${stakeAmount} ETH stake plus gas fees (~0.001-0.01 ETH). Please add more ETH to your wallet.`;
+        } else if (contractError.message.includes('user rejected')) {
+          errorMessage = "Transaction was cancelled by user";
+        } else if (contractError.message.includes('already exists') || 
+                   contractError.message.includes('already joined')) {
+          errorMessage = "You have already joined this match or it's no longer available";
+        } else {
+          errorMessage = `Failed to join staked match: ${contractError.message}`;
+        }
+      }
+      
+      setError(errorMessage);
       setJoining(false);
       setJoiningContractMatch(false);
       setTransactionHash(null);
@@ -352,6 +419,12 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
     // Validate input
     if (!name.trim()) {
       setError("Please enter your name");
+      return;
+    }
+
+    // Validate character selection
+    if (ownedCharacters.length === 0) {
+      setError("You need to own a character to join battles");
       return;
     }
     
@@ -368,7 +441,8 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
     setError(null);
     setRoomCode(roomId);
     
-    console.log("Attempting to join specific room:", roomId);
+    const selectedCharacter = ownedCharacters[selectedCharacterIndex];
+    console.log("Attempting to join specific room:", roomId, "with character:", selectedCharacter.characterTypeName);
     
     // Attempt to join the room
     joinRoom(roomId);
@@ -441,17 +515,16 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
                 type="text" 
                 value={roomCode}
                 onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-                className="bg-gray-800 border-gray-700 text-white uppercase tracking-widest font-mono"
-                placeholder="Enter room code"
-                maxLength={6}
+                className="bg-gray-800 border-gray-700 text-white uppercase font-mono text-sm"
+                placeholder="Enter room code (e.g., ABC123 or CONTRACT_123456)"
                 disabled={joining || isConnecting}
               />
             </div>
 
-            {/* Phase 4: Character selection for staked matches */}
+            {/* Character selection - required for all matches */}
             {ownedCharacters.length > 0 && (
               <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-200">Select Character (for staked matches)</label>
+                <label className="text-sm font-medium text-gray-200">Select Character</label>
                 <select
                   value={selectedCharacterIndex}
                   onChange={(e) => setSelectedCharacterIndex(Number(e.target.value))}
@@ -464,6 +537,13 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
                     </option>
                   ))}
                 </select>
+              </div>
+            )}
+
+            {ownedCharacters.length === 0 && (
+              <div className="bg-yellow-900/20 border border-yellow-600/50 rounded-lg p-3">
+                <p className="text-yellow-400 text-sm">⚠️ You need to own a character to join multiplayer battles</p>
+                <p className="text-gray-400 text-xs mt-1">Visit the character selection screen first</p>
               </div>
             )}
 
@@ -486,7 +566,7 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
             
             <Button
               onClick={handleJoinRoom}
-              disabled={!name.trim() || !roomCode.trim() || joining || isConnecting}
+              disabled={!name.trim() || !roomCode.trim() || ownedCharacters.length === 0 || joining || isConnecting}
               className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white py-3"
             >
               <LogIn className="mr-2 h-5 w-5" />
@@ -527,7 +607,6 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
                   </Button>
                 </div>
                 
-                {/* Phase 4: Show both regular rooms and contract matches */}
                 <div className="space-y-2">
                   {/* Regular Rooms */}
                   {availableRooms.length > 0 && availableRooms
@@ -544,7 +623,7 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
                               onClick={() => handleJoinSpecificRoom(room.id)}
                               className="bg-blue-600 hover:bg-blue-700"
                               size="sm"
-                              disabled={joining || isConnecting}
+                              disabled={joining || isConnecting || ownedCharacters.length === 0}
                             >
                               Join Free
                             </Button>
@@ -553,7 +632,7 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
                       </Card>
                     ))}
 
-                  {/* Phase 4: Contract Matches */}
+                  {/* Contract Matches */}
                   {availableMatches.map(match => (
                     <Card key={match.id} className="bg-gray-800 border-yellow-700">
                       <CardContent className="p-4">
@@ -566,6 +645,18 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
                             <p className="text-xs text-gray-400">
                               Stake: {match.stake} ETH • Host: {Web3Utils.formatAddress(match.host as any)}
                             </p>
+                            {isWalletReady && (
+                              <div className="text-xs mt-1">
+                                <span className={`${hasSufficientBalance(match.stake) ? 'text-green-400' : 'text-red-400'}`}>
+                                  Balance: {getFormattedBalance()} ETH
+                                </span>
+                                {!hasSufficientBalance(match.stake) && (
+                                  <span className="text-red-400 block">
+                                    Need: ~{(parseFloat(match.stake) + 0.01).toFixed(3)} ETH (stake + gas)
+                                  </span>
+                                )}
+                              </div>
+                            )}
                             {!isWalletReady && (
                               <p className="text-xs text-red-400 flex items-center mt-1">
                                 <AlertTriangle className="h-3 w-3 mr-1" />
@@ -626,6 +717,23 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
                   title="Joining Staked Match"
                   description="Broadcasting your entry to the blockchain..."
                 />
+                {joiningContractMatch && (
+                  <div className="text-center py-4 space-y-2">
+                    <div className="flex justify-center">
+                      <div className="w-8 h-8 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin"></div>
+                    </div>
+                    <div className="text-yellow-400 font-medium">
+                      {transactionHash ? 'Confirming transaction...' : 'Submitting to blockchain...'}
+                    </div>
+                    {transactionHash && (
+                      <div className="text-xs text-gray-400">
+                        <p>Transaction Hash:</p>
+                        <p className="font-mono break-all text-xs">{transactionHash}</p>
+                        <p className="mt-1">Please wait for confirmation...</p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
               <>

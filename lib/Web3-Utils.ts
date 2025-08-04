@@ -215,7 +215,7 @@ export class Web3Utils {
   }
 
   /**
-   * Parse contract error message
+   * Parse contract error messages into user-friendly strings
    */
   static parseContractError(error: any): string {
     if (error?.message) {
@@ -223,6 +223,16 @@ export class Web3Utils {
       const revertMatch = error.message.match(/reverted with reason string '([^']+)'/)
       if (revertMatch) {
         return revertMatch[1]
+      }
+
+      // Handle OutOfFund error specifically
+      if (error.message.includes('OutOfFund') || error.message.includes('The transaction failed: Error(OutOfFund)')) {
+        return 'Insufficient funds in wallet. Please add more ETH to cover gas fees and stake amount.'
+      }
+
+      // Handle limit exceeded errors (often related to insufficient balance)
+      if (error.message.includes('Request exceeds defined limit') || error.message.includes('LimitExceededRpcError')) {
+        return 'Transaction exceeds limit, likely due to insufficient funds. Please check your balance and try again.'
       }
 
       // Common error patterns

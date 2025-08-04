@@ -12,8 +12,10 @@ import LoadingScreen from "@/components/loading-screen"
 import SettingsScreen from "@/components/settings-screen"
 import MultiplayerMenu from "@/components/multiplayer-menu"
 import CreateRoom from "@/components/create-room"
+import CreateRoomContract from "@/components/create-room-contract"
 import JoinRoom from "@/components/join-room"
 import MultiplayerBattleRoom from "@/components/multiplayer-battle-room"
+import ContractBattleRoom from "@/components/contract-battle-room"
 import MultiplayerBattle from "@/components/multiplayer-battle"
 import AudioManager from "@/components/audio-manager"
 import GameNotifications from "@/components/game-notification"
@@ -30,8 +32,10 @@ export type GameScreen =
   | "settings"
   | "multiplayer-menu"
   | "create-room"
+  | "create-room-contract"
   | "join-room"
   | "multiplayer-room"
+  | "contract-room"
   | "multiplayer-character-select"
   | "multiplayer-battle"
 
@@ -93,12 +97,22 @@ function GameContent() {
   // Handle room creation/joining
   const handleRoomCreated = (roomId: string) => {
     setActiveRoomId(roomId)
-    setCurrentScreen("multiplayer-room")
+    // Route to contract room if it's a contract-based room
+    if (roomId.startsWith("CONTRACT_")) {
+      setCurrentScreen("contract-room")
+    } else {
+      setCurrentScreen("multiplayer-room")
+    }
   }
 
   const handleRoomJoined = (roomId: string) => {
     setActiveRoomId(roomId)
-    setCurrentScreen("multiplayer-room")
+    // Route to contract room if it's a contract-based room
+    if (roomId.startsWith("CONTRACT_")) {
+      setCurrentScreen("contract-room")
+    } else {
+      setCurrentScreen("multiplayer-room")
+    }
   }
 
   return (
@@ -164,6 +178,7 @@ function GameContent() {
         {currentScreen === "multiplayer-menu" && (
           <MultiplayerMenu
             onCreateRoom={() => setCurrentScreen("create-room")}
+            onCreateContractRoom={() => setCurrentScreen("create-room-contract")}
             onJoinRoom={() => setCurrentScreen("join-room")}
             onBack={() => setCurrentScreen("main-menu")}
           />
@@ -171,6 +186,13 @@ function GameContent() {
 
         {currentScreen === "create-room" && (
           <CreateRoom
+            onBack={() => setCurrentScreen("multiplayer-menu")}
+            onRoomCreated={handleRoomCreated}
+          />
+        )}
+
+        {currentScreen === "create-room-contract" && (
+          <CreateRoomContract
             onBack={() => setCurrentScreen("multiplayer-menu")}
             onRoomCreated={handleRoomCreated}
           />
@@ -185,6 +207,18 @@ function GameContent() {
 
         {currentScreen === "multiplayer-room" && (
           <MultiplayerBattleRoom
+            onBack={() => {
+              setActiveRoomId(null)
+              setCurrentScreen("multiplayer-menu")
+            }}
+            onCharacterSelect={() => setCurrentScreen("multiplayer-character-select")}
+            onStartBattle={() => setCurrentScreen("multiplayer-battle")}
+            onEndBattle={() => setCurrentScreen("multiplayer-menu")}
+          />
+        )}
+
+        {currentScreen === "contract-room" && (
+          <ContractBattleRoom
             onBack={() => {
               setActiveRoomId(null)
               setCurrentScreen("multiplayer-menu")

@@ -2,22 +2,28 @@
 
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, Users, Plus, LogIn } from "lucide-react"
+import { ArrowLeft, Users, Plus, LogIn, Zap } from "lucide-react"
 import { motion } from "framer-motion"
 import { useMultiplayer } from "./multiplayer-context-provider"
 import { playSound } from "@/lib/sound-utils"
 
 interface MultiplayerMenuProps {
   onCreateRoom: () => void
+  onCreateContractRoom: () => void
   onJoinRoom: () => void
   onBack: () => void
 }
 
-export default function MultiplayerMenu({ onCreateRoom, onJoinRoom, onBack }: MultiplayerMenuProps) {
+export default function MultiplayerMenu({ onCreateRoom, onCreateContractRoom, onJoinRoom, onBack }: MultiplayerMenuProps) {
   
   const handleCreateRoom = () => {
     playSound("button-click.mp3")
     onCreateRoom()
+  }
+
+  const handleCreateContractRoom = () => {
+    playSound("button-click.mp3")
+    onCreateContractRoom()
   }
 
   const handleJoinRoom = () => {
@@ -68,17 +74,25 @@ export default function MultiplayerMenu({ onCreateRoom, onJoinRoom, onBack }: Mu
 
           <Button
             onClick={handleCreateRoom}
-            className="w-full bg-gradient-to-r from-yellow-600 to-amber-600 hover:from-yellow-700 hover:to-amber-700 text-black font-bold py-4 text-lg"
+            className="w-full bg-gradient-to-r from-yellow-600 to-amber-600 hover:from-yellow-700 hover:to-amber-700 text-black font-bold py-3 text-sm"
           >
-            <Plus className="mr-2 h-5 w-5" />
-            Create Room
+            <Plus className="mr-2 h-4 w-4" />
+            Create Socket Room
+          </Button>
+
+          <Button
+            onClick={handleCreateContractRoom}
+            className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-bold py-3 text-sm"
+          >
+            <Zap className="mr-2 h-4 w-4" />
+            Create Contract Room
           </Button>
 
           <Button
             onClick={handleJoinRoom}
-            className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white py-4 text-lg"
+            className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white py-3 text-sm"
           >
-            <LogIn className="mr-2 h-5 w-5" />
+            <LogIn className="mr-2 h-4 w-4" />
             Join Room
           </Button>
         </div>

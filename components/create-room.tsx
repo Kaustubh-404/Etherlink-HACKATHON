@@ -100,6 +100,7 @@ export default function CreateRoom({ onBack, onRoomCreated }: CreateRoomProps) {
   // Handle room creation success
   const handleRoomCreated = useCallback((event: Event) => {
     try {
+      console.log("handleRoomCreated called in CreateRoom component!");
       const e = event as CustomEvent;
       console.log("Room created successfully:", e.detail);
       
@@ -180,6 +181,7 @@ export default function CreateRoom({ onBack, onRoomCreated }: CreateRoomProps) {
 
   // UPDATED: Enhanced timeout handling with environment variable
   useEffect(() => {
+    console.log("Setting up window event listeners in CreateRoom component");
     window.addEventListener("room_created", handleRoomCreated);
     window.addEventListener("create_room_error", handleCreateError as EventListener);
 

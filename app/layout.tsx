@@ -4,6 +4,7 @@ import "@/app/globals.css" // FIX: Use correct path
 import { ThemeProvider } from "@/components/theme-provider"
 import { GameContextProvider } from "@/components/game-context-provider"
 import { Web3Provider } from "@/components/web3-provider"
+import { ContractMultiplayerProvider } from "@/components/contract-multiplayer-provider"
 import { ErrorBoundary } from "@/components/error-boundary"
 
 export const metadata = {
@@ -22,9 +23,11 @@ export default function RootLayout({
       <body className="min-h-screen bg-gradient-to-b from-gray-900 to-black text-white">
         <ErrorBoundary>
           <Web3Provider>
-            <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
-              <GameContextProvider>{children}</GameContextProvider>
-            </ThemeProvider>
+            <ContractMultiplayerProvider>
+              <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
+                <GameContextProvider>{children}</GameContextProvider>
+              </ThemeProvider>
+            </ContractMultiplayerProvider>
           </Web3Provider>
         </ErrorBoundary>
       </body>

@@ -91,6 +91,12 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   const [contractMatchId, setContractMatchId] = useState<number | null>(null)
   const [stakeAmount, setStakeAmount] = useState<string>("0.01") // Default stake amount
   
+  // Custom setPlayerName function that updates both state and socket service
+  const updatePlayerName = useCallback((name: string) => {
+    setPlayerName(name)
+    socketService.setPlayerName(name)
+  }, [])
+
   // Save player name to localStorage
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -100,6 +106,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
   
   // Setup socket event listeners
   const setupSocketListeners = useCallback(() => {
+    console.log("Setting up socket listeners...")
     // Clear existing listeners
     socketService.off('room_created')
     socketService.off('create_room_error')
@@ -122,7 +129,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     
     // Room creation events
     socketService.on('room_created', (data: any) => {
-      console.log("Room created event received:", data)
+      console.log("Room created event received in multiplayer context:", data)
       const room = data.room
       
       if (!room) {
@@ -143,6 +150,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       setCurrentRoom(room)
       setIsHost(true)
       
+      console.log("Dispatching room_created window event with room ID:", room.id)
       const event = new CustomEvent('room_created', { detail: data })
       window.dispatchEvent(event)
       playSound('room-created.mp3')
@@ -431,7 +439,13 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       setPlayerId(id)
       setIsConnected(true)
       
+      // Set the player name in the socket service
+      socketService.setPlayerName(playerName)
+      
       setupSocketListeners()
+      
+      // Small delay to ensure listeners are fully established
+      await new Promise(resolve => setTimeout(resolve, 100))
       
       const rooms = await socketService.getAvailableRooms()
       setAvailableRooms(rooms || [])
@@ -459,7 +473,10 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     if (!isConnected) {
       connect().then(() => {
         console.log(`Connected, now creating room with name: ${name}`)
-        socketService.createRoom(name, isPrivate)
+        // Add a small delay to ensure listeners are fully set up
+        setTimeout(() => {
+          socketService.createRoom(name, isPrivate)
+        }, 200)
       }).catch(error => {
         console.error("Failed to connect before creating room:", error)
         const errorEvent = new CustomEvent('create_room_error', { 
@@ -695,7 +712,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
         stakeAmount,
         
         // Actions
-        setPlayerName,
+        setPlayerName: updatePlayerName,
         connect,
         disconnect,
         createRoom,
