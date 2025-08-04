@@ -2,9 +2,10 @@
 
 import { useState, useEffect } from "react"
 import { useGameContext } from "./game-context-provider"
+import { useGameState } from "./game-state-provider"
 import { Progress } from "@/components/ui/progress"
 import { Button } from "@/components/ui/button"
-import { Clock, Sword, Shield, Coins, Settings, Bell } from "lucide-react"
+import { Clock, Sword, Shield, Coins, Settings, Bell, Activity } from "lucide-react"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,10 +16,15 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { AnimatedNumber } from "./animated-number"
 import WalletStatus from "./wallet-status"
+import ConnectionStatus from "./connection-status"
+import { useContract } from "@/hooks/use-contract"
 
-export function GameHeader() {
+export function EnhancedGameHeader() {
   const { playerLevel, playerXP, playerCoins, playerName } = useGameContext()
+  const { isLoadingContract } = useGameState()
+  const { isLoading: contractLoading } = useContract()
   const [time, setTime] = useState(new Date())
+  const [notifications, setNotifications] = useState(3)
 
   // XP needed for next level
   const xpForNextLevel = playerLevel * 100
@@ -72,31 +78,54 @@ export function GameHeader() {
           </div>
 
           <div className="flex items-center gap-4">
+            {/* Transaction Loading Indicator */}
+            {(isLoadingContract || contractLoading) && (
+              <div className="flex items-center gap-1 text-blue-400">
+                <Activity className="h-4 w-4 animate-spin" />
+                <span className="text-xs">Processing...</span>
+              </div>
+            )}
+
+            {/* Gold Display */}
             <div className="flex items-center gap-1 bg-yellow-900/50 px-3 py-1 rounded-full border border-yellow-600">
               <Coins className="h-5 w-5 text-yellow-400" />
               <AnimatedNumber value={playerCoins} className="font-bold text-yellow-300" />
             </div>
 
+            {/* Connection Status */}
+            <ConnectionStatus />
+
+            {/* Wallet Status */}
             <WalletStatus />
 
+            {/* Notifications */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="relative">
                   <Bell className="h-5 w-5" />
-                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                    3
-                  </span>
+                  {notifications > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                      {notifications}
+                    </span>
+                  )}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuLabel>Notifications</DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem>Daily quest available!</DropdownMenuItem>
-                <DropdownMenuItem>New challenge unlocked</DropdownMenuItem>
-                <DropdownMenuItem>Friend request from TimeWizard</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setNotifications(Math.max(0, notifications - 1))}>
+                  Transaction confirmed!
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setNotifications(Math.max(0, notifications - 1))}>
+                  New multiplayer match available
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setNotifications(Math.max(0, notifications - 1))}>
+                  Character leveled up!
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
 
+            {/* Settings */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon">
@@ -104,14 +133,14 @@ export function GameHeader() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuLabel>Settings</DropdownMenuLabel>
+                <DropdownMenuLabel>Game Settings</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem>Profile</DropdownMenuItem>
                 <DropdownMenuItem>Inventory</DropdownMenuItem>
                 <DropdownMenuItem>Achievements</DropdownMenuItem>
                 <DropdownMenuItem>Settings</DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem>Logout</DropdownMenuItem>
+                <DropdownMenuItem>Disconnect Wallet</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -120,4 +149,3 @@ export function GameHeader() {
     </header>
   )
 }
-
