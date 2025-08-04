@@ -560,19 +560,15 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       setContractMatchId(matchId)
       setStakeAmount(stake)
       
-      // Notify socket service about contract match
-      socketService.emit('contract_match_created', {
-        matchId,
-        stakeAmount: stake,
-        characterInstanceId
-      })
-      
-      return matchId
-    } catch (error: any) {
-      console.error('Error initiating contract match:', error)
-      throw new Error(Web3Utils.parseContractError(error))
-    }
-  }, [contractConnected, address, initiateMatch])
+     console.log(`Contract match ${matchId} created with stake ${stake} ETH`)
+    
+    return matchId
+    
+  } catch (error: any) {
+    console.error('Error initiating contract match:', error)
+    throw new Error(Web3Utils.parseContractError(error))
+  }
+}, [contractConnected, address, initiateMatch])
   
   const joinContractMatch = useCallback(async (matchId: number, characterInstanceId: number, stake: string): Promise<Hash> => {
     if (!contractConnected || !address) {
@@ -721,3 +717,4 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     </MultiplayerContext.Provider>
   )
 }
+

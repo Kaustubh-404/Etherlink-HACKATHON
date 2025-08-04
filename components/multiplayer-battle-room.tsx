@@ -110,6 +110,7 @@ export default function MultiplayerBattleRoom({ onBack, onCharacterSelect, onSta
       // The game_started event should handle transitioning to battle
     }
   }, [startCountdown]);
+  
 
   // Handle character selection
   const handleSelectCharacter = () => {
@@ -463,4 +464,6 @@ export default function MultiplayerBattleRoom({ onBack, onCharacterSelect, onSta
     </div>
   )
 }
+
+
 

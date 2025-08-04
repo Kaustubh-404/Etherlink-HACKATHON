@@ -135,9 +135,11 @@ class MockSocketService {
 
     // Simulate async response
     setTimeout(() => {
-      this.emit('room_created', { room })
-    }, 500)
-  }
+    console.log('Emitting room_created for:', roomId);
+    this.emit('room_created', { room })
+  }, 100) // Reduced delay
+}
+
 
   joinRoom(roomId: string): void {
     if (!this.connected) {
