@@ -1,4 +1,4 @@
-// components/create-room.tsx - Phase 4: Enhanced with Contract Staking
+// components/create-room.tsx - Phase 4: Enhanced with Contract Staking (FIXED)
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
@@ -229,7 +229,7 @@ export default function CreateRoom({ onBack, onRoomCreated }: CreateRoomProps) {
       // Validate stake amount
       const validation = Web3Utils.validateStakeAmount(stakeAmount);
       if (!validation.isValid) {
-        setError(validation.error);
+        setError(validation.error || "Invalid stake amount");
         return;
       }
 
@@ -293,7 +293,7 @@ export default function CreateRoom({ onBack, onRoomCreated }: CreateRoomProps) {
   };
 
   const handleCopyRoomId = () => {
-    if (!currentRoom || !currentRoom.id) return;
+    if (!currentRoom?.id) return;
     
     playSound("button-click.mp3");
     navigator.clipboard.writeText(currentRoom.id);
@@ -304,7 +304,7 @@ export default function CreateRoom({ onBack, onRoomCreated }: CreateRoomProps) {
   };
 
   const handleEnterRoom = () => {
-    if (!currentRoom || !currentRoom.id) return;
+    if (!currentRoom?.id) return;
     
     playSound("button-click.mp3");
     onRoomCreated(currentRoom.id);
@@ -502,7 +502,7 @@ export default function CreateRoom({ onBack, onRoomCreated }: CreateRoomProps) {
             <TransactionStatus
               isLoading={creating || isInitiatingMatch}
               error={error}
-              hash={transactionHash as any}
+              hash={transactionHash}
               title={isInitiatingMatch ? "Creating Staked Match" : "Creating Room"}
               description={
                 isInitiatingMatch 
@@ -535,7 +535,7 @@ export default function CreateRoom({ onBack, onRoomCreated }: CreateRoomProps) {
             <div className="relative">
               <div className="flex items-center bg-gray-800 rounded-lg p-4 border border-yellow-600">
                 <div className="text-2xl font-mono font-bold text-yellow-400 tracking-widest mx-auto">
-                  {currentRoom.id}
+                  {currentRoom?.id || "ERROR"}
                 </div>
               </div>
               <Button

@@ -1,4 +1,4 @@
-// components/join-room.tsx - Phase 4: Enhanced with Contract Staking
+// components/join-room.tsx - Phase 4: Enhanced with Contract Staking (FIXED)
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
@@ -17,6 +17,7 @@ import { AlertCircle } from "lucide-react"
 import TransactionStatus from "./transaction-status"
 import GasEstimation from "./gas-estimation"
 import { Web3Utils } from "@/lib/Web3-Utils"
+import type { Hash } from "viem"
 
 interface JoinRoomProps {
   onBack: () => void
@@ -62,7 +63,7 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
   const [availableMatches, setAvailableMatches] = useState<{id: number, stake: string, host: string}[]>([])
   const [loadingMatches, setLoadingMatches] = useState(false)
   const [joiningContractMatch, setJoiningContractMatch] = useState(false)
-  const [transactionHash, setTransactionHash] = useState<string | null>(null)
+  const [transactionHash, setTransactionHash] = useState<Hash | null>(null)
 
   // Reset errors when the room code changes
   useEffect(() => {
@@ -621,7 +622,7 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
                 <TransactionStatus
                   isLoading={joiningContractMatch}
                   error={error}
-                  hash={transactionHash as any}
+                  hash={transactionHash}
                   title="Joining Staked Match"
                   description="Broadcasting your entry to the blockchain..."
                 />

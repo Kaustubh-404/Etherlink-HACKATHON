@@ -1,4 +1,4 @@
-// components/multiplayer-context-provider.tsx - Phase 3: Contract Integration
+// components/multiplayer-context-provider.tsx - Phase 3: Contract Integration (FIXED)
 "use client"
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
@@ -8,6 +8,7 @@ import { playSound } from "@/lib/sound-utils"
 import { useContract } from "@/hooks/use-contract"
 import { useAccount } from "wagmi"
 import { Web3Utils } from "@/lib/Web3-Utils"
+import type { Hash } from "viem"
 
 type MultiplayerContextType = {
   // Connection State
@@ -43,8 +44,8 @@ type MultiplayerContextType = {
   
   // Contract Battle Actions
   initiateContractMatch: (characterInstanceId: number, stake: string) => Promise<number>
-  joinContractMatch: (matchId: number, characterInstanceId: number, stake: string) => Promise<void>
-  makeContractMove: (matchId: number, abilityIndex: number) => Promise<void>
+  joinContractMatch: (matchId: number, characterInstanceId: number, stake: string) => Promise<Hash>
+  makeContractMove: (matchId: number, abilityIndex: number) => Promise<Hash>
 }
 
 const MultiplayerContext = createContext<MultiplayerContextType | undefined>(undefined)
@@ -545,7 +546,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
       // Validate stake amount
       const validation = Web3Utils.validateStakeAmount(stake)
       if (!validation.isValid) {
-        throw new Error(validation.error)
+        throw new Error(validation.error || "Invalid stake amount")
       }
       
       // Initiate match on contract
@@ -573,7 +574,7 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
     }
   }, [contractConnected, address, initiateMatch])
   
-  const joinContractMatch = useCallback(async (matchId: number, characterInstanceId: number, stake: string): Promise<void> => {
+  const joinContractMatch = useCallback(async (matchId: number, characterInstanceId: number, stake: string): Promise<Hash> => {
     if (!contractConnected || !address) {
       throw new Error('Contract not connected')
     }
@@ -592,13 +593,15 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
         playerId
       })
       
+      return hash
+      
     } catch (error: any) {
       console.error('Error joining contract match:', error)
       throw new Error(Web3Utils.parseContractError(error))
     }
   }, [contractConnected, address, joinMatch, playerId])
   
-  const makeContractMove = useCallback(async (matchId: number, abilityIndex: number): Promise<void> => {
+  const makeContractMove = useCallback(async (matchId: number, abilityIndex: number): Promise<Hash> => {
     if (!contractConnected || !address) {
       throw new Error('Contract not connected')
     }
@@ -615,6 +618,8 @@ export function MultiplayerProvider({ children }: { children: ReactNode }) {
         playerId,
         transactionHash: hash
       })
+      
+      return hash
       
     } catch (error: any) {
       console.error('Error making contract move:', error)
