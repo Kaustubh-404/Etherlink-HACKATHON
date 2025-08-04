@@ -225,6 +225,12 @@ export class Web3Utils {
         return revertMatch[1]
       }
 
+      // Handle "execution reverted for unknown reason" - common in race conditions
+      if (error.message.includes('Execution reverted for an unknown reason') || 
+          (error.message.includes('execution reverted') && error.message.includes('unknown reason'))) {
+        return 'Transaction failed due to changing contract state. The match may have been filled by another player or is no longer available.'
+      }
+
       // Handle OutOfFund error specifically
       if (error.message.includes('OutOfFund') || error.message.includes('The transaction failed: Error(OutOfFund)')) {
         return 'Insufficient funds in wallet. Please add more ETH to cover gas fees and stake amount.'

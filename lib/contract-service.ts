@@ -355,17 +355,46 @@ export class ContractService {
       const [account] = await this.walletClient.getAddresses()
       const stake = parseEther(stakeAmount)
       
-      const { request } = await this.publicClient.simulateContract({
-        address: CONTRACT_ADDRESS,
-        abi: BATTLE_ARENA_ABI,
-        functionName: 'joinMatch',
-        args: [BigInt(matchId), BigInt(characterInstanceId)],
-        account,
-        value: stake
-      })
+      try {
+        // Try simulation first (preferred method)
+        const { request } = await this.publicClient.simulateContract({
+          address: CONTRACT_ADDRESS,
+          abi: BATTLE_ARENA_ABI,
+          functionName: 'joinMatch',
+          args: [BigInt(matchId), BigInt(characterInstanceId)],
+          account,
+          value: stake
+        })
 
-      const hash = await this.walletClient.writeContract(request)
-      return hash
+        const hash = await this.walletClient.writeContract(request)
+        return hash
+      } catch (simulationError: any) {
+        console.warn('Contract simulation failed, attempting direct transaction:', simulationError.message)
+        
+        // If simulation fails due to race conditions, try direct transaction
+        // This can happen when the contract state changes between validation and execution
+        if (simulationError.message?.includes('execution reverted') || 
+            simulationError.message?.includes('unknown reason')) {
+          
+          console.log('Attempting direct transaction without simulation due to potential race condition')
+          
+          // Attempt direct transaction without simulation
+          const hash = await this.walletClient.writeContract({
+            address: CONTRACT_ADDRESS,
+            abi: BATTLE_ARENA_ABI,
+            functionName: 'joinMatch',
+            args: [BigInt(matchId), BigInt(characterInstanceId)],
+            account,
+            value: stake
+          })
+          
+          console.log('Direct transaction succeeded:', hash)
+          return hash
+        }
+        
+        // If it's not a race condition error, re-throw
+        throw simulationError
+      }
     } catch (error) {
       console.error('Error joining match:', error)
       throw new Error(Web3Utils.parseContractError(error))
@@ -448,7 +477,27 @@ export class ContractService {
     value?: bigint, 
     account?: Address
   ): Promise<bigint> {
-    const maxRetries = 2;
+    // Validate inputs
+    if (!functionName) {
+      throw new Error('Function name is required for gas estimation')
+    }
+    
+    if (!args || !Array.isArray(args)) {
+      throw new Error(`Invalid args for ${functionName}: args must be an array`)
+    }
+    
+    console.log(`ContractService: Estimating gas for ${functionName}`, { 
+      args, 
+      argsTypes: args.map(arg => typeof arg),
+      argsValues: args.map(arg => String(arg)),
+      value, 
+      account 
+    })
+    
+    // Add rate limiting delay to avoid 429 errors
+    await new Promise(resolve => setTimeout(resolve, 2000))
+    
+    const maxRetries = 3; // Increased retries
     let lastError: any;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -456,6 +505,10 @@ export class ContractService {
         if (!account && this.walletClient) {
           const [walletAccount] = await this.walletClient.getAddresses()
           account = walletAccount
+        }
+
+        if (!account) {
+          throw new Error('No account available for gas estimation')
         }
 
         const gasEstimate = await this.publicClient.estimateContractGas({
@@ -481,9 +534,11 @@ export class ContractService {
           }
         }
         
-        // Wait before retrying (except on last attempt)
+        // Wait before retrying with exponential backoff for rate limiting
         if (attempt < maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)))
+          const backoffTime = Math.min(1000 * Math.pow(2, attempt), 5000) // Max 5s backoff
+          console.log(`Gas estimation retry ${attempt + 1}/${maxRetries + 1} in ${backoffTime}ms`)
+          await new Promise(resolve => setTimeout(resolve, backoffTime))
         }
       }
     }

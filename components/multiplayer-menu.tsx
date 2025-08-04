@@ -69,32 +69,38 @@ export default function MultiplayerMenu({ onCreateRoom, onCreateContractRoom, on
             <div className="w-20 h-20 bg-gradient-to-r from-purple-600 to-indigo-600 rounded-full mx-auto flex items-center justify-center mb-4">
               <Users className="w-10 h-10 text-white" />
             </div>
-            <p className="text-gray-300">Battle against friends or join random opponents in thrilling time-based combat</p>
+            <p className="text-gray-300">Arena PvP battles with smart contract wagering - winner takes all!</p>
           </div>
 
           <Button
             onClick={handleCreateRoom}
-            className="w-full bg-gradient-to-r from-yellow-600 to-amber-600 hover:from-yellow-700 hover:to-amber-700 text-black font-bold py-3 text-sm"
+            className="w-full bg-gradient-to-r from-yellow-600 to-amber-600 hover:from-yellow-700 hover:to-amber-700 text-black font-bold py-3 text-sm mb-2"
           >
             <Plus className="mr-2 h-4 w-4" />
-            Create Socket Room
+            🏟️ Create PvP Arena
           </Button>
-
-          <Button
-            onClick={handleCreateContractRoom}
-            className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-bold py-3 text-sm"
-          >
-            <Zap className="mr-2 h-4 w-4" />
-            Create Contract Room
-          </Button>
+          <p className="text-xs text-gray-400 text-center mb-4">Stake ETH • Winner takes pool • Arena combat</p>
 
           <Button
             onClick={handleJoinRoom}
-            className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white py-3 text-sm"
+            className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white py-3 text-sm mb-2"
           >
             <LogIn className="mr-2 h-4 w-4" />
-            Join Room
+            ⚔️ Join PvP Arena
           </Button>
+          <p className="text-xs text-gray-400 text-center mb-4">Match stakes • Battle for ETH • Arena style</p>
+
+          <div className="border-t border-gray-600 pt-4 mt-4">
+            <p className="text-xs text-gray-500 text-center mb-2">Legacy Options:</p>
+            <Button
+              onClick={handleCreateContractRoom}
+              variant="outline"
+              className="w-full border-gray-600 text-gray-400 hover:bg-gray-800 py-2 text-xs"
+            >
+              <Zap className="mr-2 h-3 w-3" />
+              Old Contract Room
+            </Button>
+          </div>
         </div>
       </motion.div>
 

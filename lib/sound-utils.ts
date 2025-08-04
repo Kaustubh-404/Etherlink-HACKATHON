@@ -21,6 +21,10 @@ export function playSound(soundName: string): void {
       // Add to cache once loaded
       soundCache[soundName] = sound
     },
+    onloaderror: (id, error) => {
+      // Handle missing audio files gracefully - don't log to console
+      console.warn(`Audio file not found: ${soundName}. Skipping sound playback.`)
+    },
   })
 
   sound.play()
@@ -38,6 +42,10 @@ export function preloadSounds(soundNames: string[]): void {
       soundCache[name] = new Howl({
         src: ["/audio/" + name],
         preload: true,
+        onloaderror: (id, error) => {
+          // Handle missing audio files gracefully during preload
+          console.warn(`Audio file not found during preload: ${name}. Skipping.`)
+        },
       })
     }
   })

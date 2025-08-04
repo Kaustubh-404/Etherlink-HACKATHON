@@ -8,6 +8,7 @@ import { ArrowLeft, Users, Sword, Shield, Heart, Droplet, Clock, Zap } from "luc
 import { motion, AnimatePresence } from "framer-motion"
 import { useContractMultiplayer } from "./contract-multiplayer-provider"
 import { useGameState } from "./game-state-provider"
+import { useContract } from "@/hooks/use-contract"
 import { playSound } from "@/lib/sound-utils"
 // import BattleEffects from "./battle-effects" // TODO: Add back when implementing battle animations
 
@@ -34,6 +35,7 @@ export default function ContractBattleRoom({ onBack, onCharacterSelect, onStartB
   } = useContractMultiplayer()
   
   const { selectedCharacter } = useGameState()
+  const { getMatch } = useContract()
   
   const [playerReady, setPlayerReadyState] = useState(false)
   const [opponentReady, setOpponentReady] = useState(false)
@@ -41,6 +43,7 @@ export default function ContractBattleRoom({ onBack, onCharacterSelect, onStartB
   const [startCountdown, setStartCountdown] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [contractCharacterSelected, setContractCharacterSelected] = useState(false)
+  const [isLoadingRoom, setIsLoadingRoom] = useState(true)
   
   // Get the opponent's data
   const opponentName = isHost 
@@ -52,12 +55,44 @@ export default function ContractBattleRoom({ onBack, onCharacterSelect, onStartB
   // For contract rooms, character is selected during room creation/joining
   const hasSelectedCharacter = contractCharacterSelected || (isHost ? !!currentRoom?.gameData.hostCharacterId : !!currentRoom?.gameData.guestCharacterId)
   
+  // Set character as selected when room is loaded (since character was selected during creation)
+  useEffect(() => {
+    if (currentRoom && !contractCharacterSelected) {
+      setIsLoadingRoom(false) // Room is available
+      if ((isHost && currentRoom.gameData.hostCharacterId) || (!isHost && currentRoom.gameData.guestCharacterId)) {
+        setContractCharacterSelected(true)
+        console.log('Contract character already selected during room creation')
+      }
+    }
+  }, [currentRoom, contractCharacterSelected, isHost])
+
+  // Add timeout to stop loading after reasonable time
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      setIsLoadingRoom(false)
+    }, 5000) // Stop loading after 5 seconds
+
+    return () => clearTimeout(timeout)
+  }, [])
+  
   // Check if opponent has selected a character  
   const opponentHasSelectedCharacter = isHost ? !!currentRoom?.gameData.guestCharacterId : !!currentRoom?.gameData.hostCharacterId
   
   // Auto-start when both players have characters and room is full
   const bothPlayersHaveCharacters = hasSelectedCharacter && opponentHasSelectedCharacter
   const canStartBattle = bothPlayersHaveCharacters && isRoomFull
+
+  // Auto-start battle when conditions are met
+  useEffect(() => {
+    if (canStartBattle && !battleStarting) {
+      console.log("Contract room: Both players ready, starting battle...")
+      setBattleStarting(true)
+      
+      setTimeout(() => {
+        onStartBattle()
+      }, 2000) // 2 second delay before starting battle
+    }
+  }, [canStartBattle, battleStarting, onStartBattle])
 
   // Setup event listeners for game state updates
   useEffect(() => {
@@ -119,18 +154,64 @@ export default function ContractBattleRoom({ onBack, onCharacterSelect, onStartB
     }
   }, [playerAddress, onStartBattle, currentRoom?.id, isHost])
 
+  // Poll for opponent joining (only for host)
+  useEffect(() => {
+    if (!isHost || !currentRoom || !contractConnected) return
+
+    let pollInterval: NodeJS.Timeout
+
+    const checkForOpponent = async () => {
+      try {
+        console.log('Host: Checking for opponent in match', currentRoom.matchId)
+        const matchData = await getMatch(currentRoom.matchId)
+        console.log('Host: Current match data:', matchData)
+        
+        // Check if someone joined (player2 is set and different from null address)
+        if (matchData.player2 && matchData.player2 !== '0x0000000000000000000000000000000000000000') {
+          console.log('Host: Opponent found! Player2:', matchData.player2)
+          setOpponentReady(true)
+          playSound('player-joined.mp3')
+          
+          // Clear polling
+          if (pollInterval) {
+            clearInterval(pollInterval)
+          }
+          
+          // Auto-start battle after short delay
+          setTimeout(() => {
+            console.log('Host: Starting battle with opponent')
+            onStartBattle()
+          }, 2000)
+        }
+      } catch (error) {
+        console.error('Host: Error checking for opponent:', error)
+      }
+    }
+
+    // Start polling every 3 seconds
+    console.log('Host: Starting opponent polling for match', currentRoom.matchId)
+    pollInterval = setInterval(checkForOpponent, 3000)
+    
+    // Check immediately
+    checkForOpponent()
+
+    return () => {
+      if (pollInterval) {
+        clearInterval(pollInterval)
+      }
+    }
+  }, [isHost, currentRoom, contractConnected, getMatch, onStartBattle])
+
   // Auto-start battle when both players have characters and room is full
   useEffect(() => {
-    if (canStartBattle && !battleStarting && !startCountdown) {
+    if (canStartBattle && !battleStarting && !startCountdown && !isHost) {
       console.log("Contract room: Both players ready, auto-starting battle...");
       const timer = setTimeout(() => {
-        if (isHost) {
-          // Trigger battle start countdown
-          const countdownEvent = new CustomEvent('game_countdown', { 
-            detail: { countdown: 3 } 
-          });
-          window.dispatchEvent(countdownEvent);
-        }
+        // Trigger battle start countdown for guests
+        const countdownEvent = new CustomEvent('game_countdown', { 
+          detail: { countdown: 3 } 
+        });
+        window.dispatchEvent(countdownEvent);
       }, 2000); // 2 second delay before auto-start
       
       return () => clearTimeout(timer);
@@ -155,20 +236,37 @@ export default function ContractBattleRoom({ onBack, onCharacterSelect, onStartB
 
   // Auto-battle will start when both players have characters
 
-  // Show error if no room found
+  // Show loading while waiting for room data, then error if timeout
   if (!currentRoom) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-red-900 via-purple-900 to-indigo-900 flex items-center justify-center p-4">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold text-red-300 mb-4">Room Not Found</h1>
-          <p className="text-gray-300 mb-6">The contract room you're looking for doesn't exist or has been closed.</p>
-          <Button onClick={handleBack} className="bg-purple-600 hover:bg-purple-700">
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Menu
-          </Button>
+    if (isLoadingRoom) {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900 flex items-center justify-center p-4">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-400 mx-auto mb-4"></div>
+            <h1 className="text-2xl font-bold text-purple-300 mb-4">Loading Contract Room...</h1>
+            <p className="text-gray-300 mb-6">Setting up your arena battle room...</p>
+            <Button onClick={handleBack} className="bg-purple-600 hover:bg-purple-700">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to Menu
+            </Button>
+          </div>
         </div>
-      </div>
-    )
+      )
+    } else {
+      // Show error after timeout
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-red-900 via-purple-900 to-indigo-900 flex items-center justify-center p-4">
+          <div className="text-center">
+            <h1 className="text-2xl font-bold text-red-300 mb-4">Room Not Found</h1>
+            <p className="text-gray-300 mb-6">The contract room you're looking for doesn't exist or has been closed.</p>
+            <Button onClick={handleBack} className="bg-purple-600 hover:bg-purple-700">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back to Menu
+            </Button>
+          </div>
+        </div>
+      )
+    }
   }
 
       return (

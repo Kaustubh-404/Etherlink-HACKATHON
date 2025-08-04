@@ -19,6 +19,10 @@ export default function AudioManager({ soundEnabled, musicVolume, sfxVolume }: A
       loop: true,
       volume: musicVolume,
       autoplay: true,
+      onloaderror: (id, error) => {
+        // Handle missing main theme gracefully
+        console.warn("Background music file not found. Playing in silent mode.")
+      },
     })
 
     return () => {

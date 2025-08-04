@@ -673,10 +673,13 @@ export default function JoinRoom({ onBack, onRoomJoined }: JoinRoomProps) {
                             >
                               Join ({match.stake} ETH)
                             </Button>
-                            {ownedCharacters.length > 0 && isWalletReady && (
+                            {ownedCharacters.length > 0 && isWalletReady && selectedCharacterIndex < ownedCharacters.length && ownedCharacters[selectedCharacterIndex] && (
                               <GasEstimation
                                 functionName="joinMatch"
-                                args={[BigInt(match.id), BigInt(ownedCharacters[selectedCharacterIndex]?.id || 0)]}
+                                args={[
+                                  BigInt(match.id), 
+                                  BigInt(ownedCharacters[selectedCharacterIndex].id)
+                                ]}
                                 value={Web3Utils.parseEth(match.stake)}
                                 showDetails={false}
                                 className="text-xs"

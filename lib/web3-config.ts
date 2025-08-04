@@ -14,10 +14,16 @@ export const etherlink = {
   },
   rpcUrls: {
     default: {
-      http: [process.env.NEXT_PUBLIC_ETHERLINK_RPC_URL || 'https://node.ghostnet.etherlink.com'],
+      http: [
+        process.env.NEXT_PUBLIC_ETHERLINK_RPC_URL || 'https://node.ghostnet.etherlink.com',
+        'https://rpc.etherlink.com' // Fallback RPC to handle rate limiting
+      ],
     },
     public: {
-      http: [process.env.NEXT_PUBLIC_ETHERLINK_RPC_URL || 'https://node.ghostnet.etherlink.com'],
+      http: [
+        process.env.NEXT_PUBLIC_ETHERLINK_RPC_URL || 'https://node.ghostnet.etherlink.com',
+        'https://rpc.etherlink.com' // Fallback RPC to handle rate limiting
+      ],
     },
   },
   blockExplorers: {
@@ -26,7 +32,7 @@ export const etherlink = {
   testnet: true,
 } as const
 
-// Wagmi Configuration
+// Wagmi Configuration with retry and rate limiting
 export const config = createConfig({
   chains: [etherlink, sepolia, mainnet],
   connectors: [
@@ -37,7 +43,20 @@ export const config = createConfig({
     }),
   ],
   transports: {
-    [etherlink.id]: http(process.env.NEXT_PUBLIC_ETHERLINK_RPC_URL),
+    [etherlink.id]: http(process.env.NEXT_PUBLIC_ETHERLINK_RPC_URL, {
+      batch: true,
+      fetchOptions: {
+        mode: 'cors',
+      },
+      retryCount: 3,
+      retryDelay: ({ count, error }) => {
+        // Exponential backoff with jitter for rate limiting
+        if (error && error.message && error.message.includes('429')) {
+          return Math.min(1000 * Math.pow(2, count) + Math.random() * 1000, 10000)
+        }
+        return 1000 * Math.pow(2, count)
+      },
+    }),
     [sepolia.id]: http(),
     [mainnet.id]: http(),
   },

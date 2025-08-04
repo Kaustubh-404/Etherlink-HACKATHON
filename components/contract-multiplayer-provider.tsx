@@ -5,7 +5,9 @@ import React, { createContext, useContext, useState, useCallback, useEffect, Rea
 import { useAccount } from 'wagmi'
 import { type Address } from 'viem'
 import { useContract } from '@/hooks/use-contract'
+import { contractService } from '@/lib/contract-service'
 import { playSound } from '@/lib/sound-utils'
+import { Web3Utils } from '@/lib/Web3-Utils'
 
 interface ContractRoom {
   id: string
@@ -15,6 +17,8 @@ interface ContractRoom {
   hostName: string
   guestAddress?: Address
   guestName?: string
+  hostCharacter?: ContractCharacter
+  guestCharacter?: ContractCharacter
   players: Address[]
   status: 'waiting' | 'playing' | 'completed'
   maxPlayers: number
@@ -94,7 +98,7 @@ export function ContractMultiplayerProvider({ children }: { children: ReactNode 
   const { 
     isConnected: contractConnected, 
     initiateMatch, 
-    joinMatch, 
+    joinMatch: contractJoinMatch, 
     getMatch,
     getFindingMatches 
   } = useContract()
@@ -185,17 +189,54 @@ export function ContractMultiplayerProvider({ children }: { children: ReactNode 
       const txHash = await initiateMatch(characterInstanceId, stake)
       console.log('Contract match creation transaction:', txHash)
       
+      // Wait for transaction to be mined and get the real match ID from events
+      console.log('Waiting for transaction confirmation...')
+      const receipt = await contractService.waitForTransaction(txHash)
+      console.log('Transaction confirmed:', receipt)
+      
+      // Parse the MatchInitiated event to get the real match ID
+      const matchInitiatedEvents = await contractService.getPastEvents('MatchInitiated', receipt.blockNumber, receipt.blockNumber)
+      console.log('MatchInitiated events:', matchInitiatedEvents)
+      
+      // Find the event for this transaction
+      const matchEvent = matchInitiatedEvents.find((event: any) => 
+        event.transactionHash === txHash && 
+        event.args?.initiator?.toLowerCase() === address.toLowerCase()
+      )
+      
+      if (!matchEvent || !matchEvent.args) {
+        throw new Error('Could not find MatchInitiated event in transaction')
+      }
+      
+      // Extract the real match ID from the event
+      const realMatchId = Number((matchEvent.args as any).matchId)
+      console.log('Real match ID from contract:', realMatchId)
+      
       // Set local state
       setStakeAmountState(stake)
       
-      // Create room data for UI
-      const matchId = Date.now() % 1000000 // Temporary ID until we get real one from contract
+      // Create room data for UI with REAL match ID
       const room: ContractRoom = {
-        id: `CONTRACT_${matchId}`,
-        matchId,
+        id: `CONTRACT_${realMatchId}`,
+        matchId: realMatchId,
         name: name || `${playerName}'s Room`,
         hostAddress: address,
         hostName: playerName,
+        // Add host character object for battle UI compatibility
+        hostCharacter: {
+          id: characterInstanceId.toString(),
+          name: 'Chronos', // This should be determined from the actual character
+          avatar: '/images/chronos.png',
+          health: 120,
+          mana: 100,
+          description: 'Master of Time',
+          abilities: [],
+          contractInstanceId: characterInstanceId,
+          characterTypeId: characterInstanceId,
+          level: 1,
+          experience: 0,
+          owner: address
+        },
         players: [address],
         status: 'waiting',
         maxPlayers: 2,
@@ -211,13 +252,13 @@ export function ContractMultiplayerProvider({ children }: { children: ReactNode 
 
       setCurrentRoom(room)
       setIsHost(true)
-      setContractMatchId(matchId)
+      setContractMatchId(realMatchId)
       
       // Set the character in room data so UI knows character is already selected
       const characterSelectedEvent = new CustomEvent('contract_character_selected', { 
         detail: { 
           characterInstanceId,
-          roomId: `CONTRACT_${matchId}`,
+          roomId: `CONTRACT_${realMatchId}`,
           isHost: true
         } 
       })
@@ -240,7 +281,7 @@ export function ContractMultiplayerProvider({ children }: { children: ReactNode 
   }, [address, contractConnected, initiateMatch, playerName])
 
   // Join room using real contract
-  const joinRoom = useCallback((roomId: string, characterInstanceId: number = 1) => {
+  const joinRoom = useCallback(async (roomId: string, characterInstanceId: number = 1) => {
     if (!address || !contractConnected) {
       throw new Error('Contract not connected')
     }
@@ -253,26 +294,84 @@ export function ContractMultiplayerProvider({ children }: { children: ReactNode 
     try {
       console.log('Joining contract match:', matchId, 'with character:', characterInstanceId)
       
-      // This would call the real contract joinMatch method
-      // For now, we'll emit the join event
-      const room: ContractRoom = {
+      // Get match data from contract to validate basic requirements
+      const matchData = await getMatch(matchId)
+      console.log('Got match data from contract before joining:', matchData)
+      
+      // Only validate things that won't change due to race conditions
+      if (matchData.player1.toLowerCase() === address.toLowerCase()) {
+        throw new Error('Cannot join your own match')
+      }
+      
+      // Note: We don't check player2 or status here as the contract will handle race conditions
+      // The contract will reject if match is no longer available or already full
+      
+      // Make the actual contract call to join the match  
+      console.log('Calling contract joinMatch function...')
+      const joinTxHash = await contractJoinMatch(matchId, characterInstanceId, Web3Utils.formatEth(matchData.stake))
+      console.log('Successfully joined contract match, tx hash:', joinTxHash)
+      
+      // Create room data based on contract info
+      const existingRoom = {
         id: roomId,
         matchId,
         name: `Contract Match ${matchId}`,
-        hostAddress: '0x0000000000000000000000000000000000000000' as Address, // Would get from contract
-        hostName: 'Host Player',
-        guestAddress: address,
-        guestName: playerName,
-        players: ['0x0000000000000000000000000000000000000000' as Address, address],
-        status: 'playing',
+        hostAddress: matchData.player1,
+        hostName: 'Host Player', // In real implementation, get from contract events
+        players: [matchData.player1],
+        status: 'waiting' as const,
         maxPlayers: 2,
         isPrivate: false,
         createdAt: Date.now(),
-        stakeAmount: '0.001',
+        stakeAmount: Web3Utils.formatEth(matchData.stake),
         gameData: {
+          hostCharacterId: 1, // Would be extracted from contract
+          turnCount: 0,
+          battleLog: ['Contract match found!']
+        }
+      }
+      
+      // Create updated room with guest joined
+      const room: ContractRoom = {
+        ...existingRoom,
+        guestAddress: address,
+        guestName: playerName,
+        // Add character objects for battle UI compatibility
+        hostCharacter: {
+          id: '1',
+          name: 'Chronos',
+          avatar: '/images/chronos.png',
+          health: 120,
+          mana: 100,
+          description: 'Master of Time',
+          abilities: [],
+          contractInstanceId: 1,
+          characterTypeId: 1,
+          level: 1,
+          experience: 0,
+          owner: existingRoom.hostAddress
+        },
+        guestCharacter: {
+          id: characterInstanceId.toString(),
+          name: 'Stormcaller', // This should be determined from the actual character
+          avatar: '/images/stormcaller.png',
+          health: 110,
+          mana: 120,
+          description: 'Lightning Wielder',
+          abilities: [],
+          contractInstanceId: characterInstanceId,
+          characterTypeId: characterInstanceId,
+          level: 1,
+          experience: 0,
+          owner: address
+        },
+        players: [existingRoom.hostAddress, address],
+        status: 'playing',
+        gameData: {
+          ...existingRoom.gameData,
           guestCharacterId: characterInstanceId,
           turnCount: 1,
-          battleLog: ['Player joined! Battle starting...']
+          battleLog: [...(existingRoom.gameData.battleLog || []), 'Player joined! Battle starting...']
         }
       }
 
@@ -291,6 +390,9 @@ export function ContractMultiplayerProvider({ children }: { children: ReactNode 
       })
       window.dispatchEvent(characterSelectedEvent)
       
+      // Note: Host will detect opponent joining via contract polling
+      console.log('Guest joined room successfully. Host will detect via contract polling.')
+      
       // Use a longer timeout to ensure state has updated and dispatch the room_joined event
       setTimeout(() => {
         console.log('Dispatching room_joined event for room:', room.id)
@@ -300,8 +402,104 @@ export function ContractMultiplayerProvider({ children }: { children: ReactNode 
       
     } catch (error: any) {
       console.error('Error joining room:', error)
+      
+      // Check if the join actually succeeded despite the error (common with simulation failures)
+      if (error?.message?.includes('Execution reverted for an unknown reason') || 
+          error?.message?.includes('execution reverted')) {
+        
+        console.log('Verifying if join actually succeeded despite simulation error...')
+        
+        try {
+          // Wait a moment for potential transaction to be mined
+          await new Promise(resolve => setTimeout(resolve, 2000))
+          
+          // Check if we're now player2 in the match
+          const matchData = await getMatch(matchId)
+          if (matchData.player2?.toLowerCase() === address.toLowerCase()) {
+            console.log('Join actually succeeded! Player is now player2 in match:', matchId)
+            
+            // Create the room data since join was successful
+            const existingRoom = {
+              id: roomId,
+              matchId,
+              name: `Contract Match ${matchId}`,
+              hostAddress: matchData.player1,
+              hostName: 'Host Player',
+              players: [matchData.player1, address],
+              status: 'playing' as const,
+              maxPlayers: 2,
+              isPrivate: false,
+              createdAt: Date.now(),
+              contractMatchId: matchId,
+              stakeAmount: Web3Utils.formatEth(matchData.stake),
+              gameData: {
+                currentTurn: matchData.currentTurn,
+                turnCount: 0,
+                battleLog: [],
+                startTime: Date.now()
+              },
+              hostCharacter: {
+                id: '1',
+                name: 'Host Character',
+                avatar: '/images/chronos.png',
+                health: 120,
+                mana: 100,
+                description: 'Host Character',
+                abilities: [],
+                contractInstanceId: 1,
+                characterTypeId: 1,
+                level: 1,
+                experience: 0,
+                owner: matchData.player1
+              },
+              guestCharacter: {
+                id: characterInstanceId.toString(),
+                name: 'Guest Character',
+                avatar: '/images/stormcaller.png',
+                health: 110,
+                mana: 120,
+                description: 'Guest Character',
+                abilities: [],
+                contractInstanceId: characterInstanceId,
+                characterTypeId: characterInstanceId,
+                level: 1,
+                experience: 0,
+                owner: address
+              }
+            }
+
+            setCurrentRoom(existingRoom)
+            setIsHost(false)
+            setContractMatchId(matchId)
+
+            // Dispatch success event 
+            setTimeout(() => {
+              console.log('Dispatching room_joined event after verification for room:', existingRoom.id)
+              const event = new CustomEvent('room_joined', { detail: { room: existingRoom, roomId: existingRoom.id } })
+              window.dispatchEvent(event)
+            }, 500)
+            
+            return // Exit early, join was successful
+          }
+        } catch (verifyError) {
+          console.error('Error verifying match state:', verifyError)
+        }
+      }
+      
+      // Provide better error messages for common race condition scenarios
+      let errorMessage = error?.message || 'Unknown error'
+      
+      // Handle specific contract revert reasons
+      if (errorMessage.includes('Match not available')) {
+        errorMessage = 'This match is no longer available - it may have just been filled by another player or started already.'
+      } else if (errorMessage.includes('Cannot join own match')) {
+        errorMessage = 'You cannot join your own match.'
+      } else if (errorMessage.includes('Incorrect stake amount')) {
+        errorMessage = 'The stake amount is incorrect. This match may have been modified.'
+      }
+      
       setTimeout(() => {
-        const event = new CustomEvent('join_room_error', { detail: { error: error.message } })
+        const event = new CustomEvent('join_room_error', { detail: { error: errorMessage } })
         window.dispatchEvent(event)
       }, 100)
     }

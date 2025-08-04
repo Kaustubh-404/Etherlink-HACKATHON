@@ -8,6 +8,7 @@ import { ArrowLeft, ArrowRight, Check, Plus, Star, Zap, ShoppingCart, TrendingUp
 import { motion, AnimatePresence } from "framer-motion"
 import { useGameState } from "./game-state-provider"
 import { useMultiplayer } from "./multiplayer-context-provider"
+import { useContractMultiplayer } from "./contract-multiplayer-provider"
 import { playSound } from "@/lib/sound-utils"
 import { Web3Utils, type CharacterInstance, type CharacterType } from "@/lib/Web3-Utils"
 import TransactionStatus from "./transaction-status"
@@ -34,7 +35,23 @@ export default function CharacterSelect({ onSelect, onBack, isMultiplayer = fals
     levelUpCharacter,
     refreshContractData
   } = useGameState()
-  const { selectCharacter: selectMultiplayerCharacter } = useMultiplayer()
+  
+  // Try to get multiplayer context, but don't fail if it's not available
+  let selectMultiplayerCharacter: ((character: any) => void) | null = null
+  try {
+    const { selectCharacter } = useMultiplayer()
+    selectMultiplayerCharacter = selectCharacter
+  } catch (error) {
+    // useMultiplayer not available in this context, that's okay
+    console.log('Regular multiplayer context not available, trying contract multiplayer...')
+    try {
+      const { selectCharacter } = useContractMultiplayer()
+      selectMultiplayerCharacter = selectCharacter
+    } catch (contractError) {
+      // Neither multiplayer context available, that's okay for single player
+      console.log('Contract multiplayer context not available either')
+    }
+  }
   
   const [viewMode, setViewMode] = useState<ViewMode>('owned')
   const [selectedOwnedIndex, setSelectedOwnedIndex] = useState(0)
@@ -91,7 +108,7 @@ export default function CharacterSelect({ onSelect, onBack, isMultiplayer = fals
         await selectContractCharacter(selectedCharacterInstance)
         
         // For multiplayer, also update multiplayer context
-        if (isMultiplayer) {
+        if (isMultiplayer && selectMultiplayerCharacter) {
           // Convert to multiplayer character format
           const multiplayerCharacter = {
             id: selectedCharacterInstance.id.toString(),

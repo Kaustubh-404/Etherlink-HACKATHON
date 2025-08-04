@@ -52,12 +52,37 @@ export default function GasEstimation({
   // Estimate gas when parameters change
   useEffect(() => {
     if (!address) return
+    
+    // Add a small delay to avoid rapid successive calls
+    const timeoutId = setTimeout(() => {
+    
+    // Check for invalid values in args (BigInt can't be created from null/undefined)
+    try {
+      // Validate that all args can be converted to strings (BigInt validation)
+      console.log('GasEstimation: Validating args', { functionName, args, argTypes: args.map(arg => typeof arg) })
+      
+      args.forEach((arg, index) => {
+        if (arg === undefined || arg === null) {
+          throw new Error(`Argument at index ${index} is ${arg}`)
+        }
+        // Try to convert to BigInt to validate
+        if (typeof arg !== 'bigint' && typeof arg !== 'number' && typeof arg !== 'string') {
+          throw new Error(`Argument at index ${index} is not a valid type for BigInt: ${typeof arg}`)
+        }
+      })
+      
+      console.log('GasEstimation: Args validation passed')
+    } catch (validationError) {
+      console.warn('GasEstimation: Args validation failed', { functionName, args, error: validationError })
+      return
+    }
 
     const performEstimation = async () => {
       try {
         setIsLoading(true)
         setError(null)
 
+        console.log('GasEstimation: Estimating gas for', { functionName, args, value })
         const estimate = await estimateGas(functionName, args, value)
         const cost = Web3Utils.formatEth(estimate * gasPrice)
         
@@ -97,6 +122,9 @@ export default function GasEstimation({
     }
 
     performEstimation()
+    }, 3000) // 3s delay to prevent rate limiting
+    
+    return () => clearTimeout(timeoutId)
   }, [functionName, args, value, address, gasPrice, estimateGas, onEstimationComplete])
 
   const getGasLevel = () => {

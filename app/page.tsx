@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { GameStateProvider } from "@/components/game-state-provider"
-import { MultiplayerProvider } from "@/components/multiplayer-context-provider"
+
 import MainMenu from "@/components/main-menu"
 import GameScreenComponent from "@/components/game-screen"
 import CharacterSelect from "@/components/character-select"
@@ -13,10 +13,13 @@ import SettingsScreen from "@/components/settings-screen"
 import MultiplayerMenu from "@/components/multiplayer-menu"
 import CreateRoom from "@/components/create-room"
 import CreateRoomContract from "@/components/create-room-contract"
+import CreatePvPRoom from "@/components/create-pvp-room"
 import JoinRoom from "@/components/join-room"
+import JoinPvPRoom from "@/components/join-pvp-room"
 import MultiplayerBattleRoom from "@/components/multiplayer-battle-room"
 import ContractBattleRoom from "@/components/contract-battle-room"
 import MultiplayerBattle from "@/components/multiplayer-battle"
+import ContractPvPBattle from "@/components/contract-pvp-battle"
 import AudioManager from "@/components/audio-manager"
 import GameNotifications from "@/components/game-notification"
 import { useGameState } from "@/components/game-state-provider" 
@@ -33,11 +36,14 @@ export type GameScreen =
   | "multiplayer-menu"
   | "create-room"
   | "create-room-contract"
+  | "create-pvp-room"
   | "join-room"
+  | "join-pvp-room"
   | "multiplayer-room"
-  | "contract-room"
+  | "contract-battle-room"
   | "multiplayer-character-select"
   | "multiplayer-battle"
+  | "contract-pvp-battle"
 
 // CREATE A WRAPPER COMPONENT TO ACCESS GAME STATE
 function GameContent() {
@@ -70,6 +76,10 @@ function GameContent() {
       loop: true,
       volume: musicVolume,
       autoplay: false,
+      onloaderror: (id, error) => {
+        // Handle missing main theme gracefully
+        console.warn("Background music file not found. Playing in silent mode.")
+      },
     })
 
     if (isLoaded && !isMusicPlaying) {
@@ -97,9 +107,9 @@ function GameContent() {
   // Handle room creation/joining
   const handleRoomCreated = (roomId: string) => {
     setActiveRoomId(roomId)
-    // Route to contract room if it's a contract-based room
-    if (roomId.startsWith("CONTRACT_")) {
-      setCurrentScreen("contract-room")
+    // Route to appropriate waiting room first, not directly to battle
+    if (roomId.startsWith("CONTRACT_") || roomId.startsWith("PVP_")) {
+      setCurrentScreen("contract-battle-room") // Go to waiting room first
     } else {
       setCurrentScreen("multiplayer-room")
     }
@@ -107,9 +117,9 @@ function GameContent() {
 
   const handleRoomJoined = (roomId: string) => {
     setActiveRoomId(roomId)
-    // Route to contract room if it's a contract-based room
-    if (roomId.startsWith("CONTRACT_")) {
-      setCurrentScreen("contract-room")
+    // Route to contract PvP battle for enhanced rooms
+    if (roomId.startsWith("CONTRACT_") || roomId.startsWith("PVP_")) {
+      setCurrentScreen("contract-pvp-battle")
     } else {
       setCurrentScreen("multiplayer-room")
     }
@@ -123,7 +133,6 @@ function GameContent() {
         onDismiss={dismissNotification} 
       />
       
-      <MultiplayerProvider>
         <AudioManager soundEnabled={soundEnabled} musicVolume={musicVolume} sfxVolume={sfxVolume} />
 
         {currentScreen === "loading" && <LoadingScreen />}
@@ -177,9 +186,9 @@ function GameContent() {
         {/* Multiplayer Screens */}
         {currentScreen === "multiplayer-menu" && (
           <MultiplayerMenu
-            onCreateRoom={() => setCurrentScreen("create-room")}
+            onCreateRoom={() => setCurrentScreen("create-pvp-room")}
             onCreateContractRoom={() => setCurrentScreen("create-room-contract")}
-            onJoinRoom={() => setCurrentScreen("join-room")}
+            onJoinRoom={() => setCurrentScreen("join-pvp-room")}
             onBack={() => setCurrentScreen("main-menu")}
           />
         )}
@@ -198,8 +207,22 @@ function GameContent() {
           />
         )}
 
+        {currentScreen === "create-pvp-room" && (
+          <CreatePvPRoom
+            onBack={() => setCurrentScreen("multiplayer-menu")}
+            onRoomCreated={handleRoomCreated}
+          />
+        )}
+
         {currentScreen === "join-room" && (
           <JoinRoom
+            onBack={() => setCurrentScreen("multiplayer-menu")}
+            onRoomJoined={handleRoomJoined}
+          />
+        )}
+
+        {currentScreen === "join-pvp-room" && (
+          <JoinPvPRoom
             onBack={() => setCurrentScreen("multiplayer-menu")}
             onRoomJoined={handleRoomJoined}
           />
@@ -217,7 +240,8 @@ function GameContent() {
           />
         )}
 
-        {currentScreen === "contract-room" && (
+        {/* Removed old contract-room - using contract-battle-room instead */}
+        {false && (
           <ContractBattleRoom
             onBack={() => {
               setActiveRoomId(null)
@@ -248,6 +272,32 @@ function GameContent() {
           />
         )}
 
+        {currentScreen === "contract-battle-room" && (
+          <ContractBattleRoom
+            onBack={() => {
+              setActiveRoomId(null)
+              setCurrentScreen("multiplayer-menu")
+            }}
+            onCharacterSelect={() => setCurrentScreen("character-select")}
+            onStartBattle={() => setCurrentScreen("contract-pvp-battle")}
+            onEndBattle={() => {
+              setActiveRoomId(null)
+              setCurrentScreen("main-menu")
+            }}
+          />
+        )}
+
+        {currentScreen === "contract-pvp-battle" && (
+          <ContractPvPBattle
+            onGameOver={() => setCurrentScreen("game-over")}
+            onVictory={() => setCurrentScreen("victory")}
+            onExit={() => {
+              setActiveRoomId(null)
+              setCurrentScreen("multiplayer-menu")
+            }}
+          />
+        )}
+
         {currentScreen === "settings" && (
           <SettingsScreen
             onBack={() => setCurrentScreen("main-menu")}
@@ -259,7 +309,6 @@ function GameContent() {
             updateSfxVolume={updateSfxVolume}
           />
         )}
-      </MultiplayerProvider>
     </>
   )
 }
