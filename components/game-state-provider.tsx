@@ -1,10 +1,23 @@
-// components/game-state-provider.tsx - Phase 3: Contract Integration
+// components/game-state-provider.tsx - Phase 5: Enhanced with Notifications
 "use client"
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react"
 import { useContract } from "@/hooks/use-contract"
 import { useAccount } from "wagmi"
 import { Web3Utils, type CharacterType, type CharacterInstance } from "@/lib/Web3-Utils"
+
+export interface Notification {
+  id: string
+  type: 'success' | 'error' | 'info' | 'achievement'
+  title: string
+  message: string
+  duration?: number
+  actions?: Array<{
+    label: string
+    onClick: () => void
+    variant?: 'default' | 'outline'
+  }>
+}
 
 export type Character = {
   id: string
@@ -14,7 +27,6 @@ export type Character = {
   mana: number
   abilities: Ability[]
   description: string
-  // Contract-specific fields
   contractInstanceId?: number
   characterTypeId?: number
   level?: number
@@ -69,6 +81,9 @@ type GameState = {
   battleLog: string[]
   currentMatchId: number | null
   
+  // UI State
+  notifications: Notification[]
+  
   // Actions
   selectCharacter: (character: Character) => void
   selectContractCharacter: (characterInstance: CharacterInstance) => Promise<void>
@@ -86,6 +101,10 @@ type GameState = {
   levelUp: () => void
   gainExperience: (amount: number) => void
   refreshContractData: () => Promise<void>
+  
+  // UI Actions
+  addNotification: (notification: Omit<Notification, 'id'>) => void
+  dismissNotification: (id: string) => void
 }
 
 const GameStateContext = createContext<GameState | undefined>(undefined)
@@ -181,7 +200,7 @@ const getCharacterAvatar = (characterName: string): string => {
   return avatars[characterName] || '/images/default-character.png'
 }
 
-// Generate enemy based on level (updated for contract integration)
+// Generate enemy based on level
 const generateContractEnemy = (level: number): Enemy => {
   const enemyTypes = [
     {
@@ -257,6 +276,9 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
   const [achievements, setAchievements] = useState<string[]>([])
   const [battleLog, setBattleLog] = useState<string[]>([])
   const [currentMatchId, setCurrentMatchId] = useState<number | null>(null)
+  
+  // UI state
+  const [notifications, setNotifications] = useState<Notification[]>([])
 
   // Load saved game state
   useEffect(() => {
@@ -305,6 +327,35 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     }
   }, [level, currentEnemy])
 
+  // Auto-dismiss notifications
+  useEffect(() => {
+    notifications.forEach(notification => {
+      if (notification.duration && notification.duration > 0) {
+        const timer = setTimeout(() => {
+          dismissNotification(notification.id)
+        }, notification.duration)
+        
+        return () => clearTimeout(timer)
+      }
+    })
+  }, [notifications])
+
+  // Notification management
+  const addNotification = useCallback((notification: Omit<Notification, 'id'>) => {
+    const id = `notification_${Date.now()}_${Math.random()}`
+    const newNotification: Notification = {
+      ...notification,
+      id,
+      duration: notification.duration || 5000
+    }
+    
+    setNotifications(prev => [...prev, newNotification])
+  }, [])
+
+  const dismissNotification = useCallback((id: string) => {
+    setNotifications(prev => prev.filter(n => n.id !== id))
+  }, [])
+
   const selectCharacter = useCallback((character: Character) => {
     setSelectedCharacter(character)
     
@@ -322,6 +373,10 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
       setCurrentEnemy(generateContractEnemy(level))
     }
   }, [level, currentEnemy])
+
+  const addToBattleLog = useCallback((message: string) => {
+    setBattleLog(prev => [...prev, message].slice(-50)) // Keep last 50 messages
+  }, [])
 
   const selectContractCharacter = useCallback(async (characterInstance: CharacterInstance) => {
     try {
@@ -341,35 +396,84 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
       selectCharacter(gameCharacter)
       
       addToBattleLog(`Selected ${gameCharacter.name} (Level ${gameCharacter.level})`)
+      
+      addNotification({
+        type: 'success',
+        title: 'Character Selected',
+        message: `${gameCharacter.name} is ready for battle!`,
+        duration: 3000
+      })
     } catch (error) {
       console.error('Error selecting contract character:', error)
       addToBattleLog('Error selecting character')
+      addNotification({
+        type: 'error',
+        title: 'Selection Failed',
+        message: 'Failed to select character',
+        duration: 3000
+      })
     }
-  }, [contractCharacterTypes, selectCharacter])
+  }, [contractCharacterTypes, selectCharacter, addToBattleLog, addNotification])
 
   const acquireNewCharacter = useCallback(async (characterTypeId: number): Promise<string> => {
     try {
+      addNotification({
+        type: 'info',
+        title: 'Acquiring Character',
+        message: 'Transaction submitted. Please wait...',
+        duration: 3000
+      })
+      
       // Call the contract function and get the transaction hash
       const hash = await acquireCharacter(characterTypeId)
       
       addToBattleLog('Character acquired successfully!')
       
-      // Return the transaction hash (Hash type from viem is a string)
+      addNotification({
+        type: 'success',
+        title: 'Character Acquired!',
+        message: 'Your new character has been successfully acquired.',
+        duration: 5000
+      })
+      
+      // Return the transaction hash
       return hash
       
     } catch (error) {
       console.error('Error acquiring character:', error)
       addToBattleLog('Failed to acquire character')
+      
+      addNotification({
+        type: 'error',
+        title: 'Acquisition Failed',
+        message: 'Failed to acquire character',
+        duration: 7000
+      })
+      
       throw error
     }
-  }, [acquireCharacter])
+  }, [acquireCharacter, addToBattleLog, addNotification])
 
   const levelUpCharacter = useCallback(async (characterInstanceId: number): Promise<string> => {
     try {
+      addNotification({
+        type: 'info',
+        title: 'Leveling Up Character',
+        message: 'Transaction submitted. Please wait...',
+        duration: 3000
+      })
+      
       // Call the contract function and get the transaction hash
       const hash = await contractLevelUpCharacter(characterInstanceId)
       
       addToBattleLog('Character leveled up successfully!')
+      
+      addNotification({
+        type: 'achievement',
+        title: 'Level Up!',
+        message: 'Your character has been successfully leveled up!',
+        duration: 5000
+      })
       
       // Update selected character if it was leveled up
       if (selectedCharacter?.contractInstanceId === characterInstanceId) {
@@ -392,27 +496,49 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
         }, 1000)
       }
       
-      // Return the transaction hash (Hash type from viem is a string)
+      // Return the transaction hash
       return hash
       
     } catch (error) {
       console.error('Error leveling up character:', error)
       addToBattleLog('Failed to level up character')
+      
+      addNotification({
+        type: 'error',
+        title: 'Level Up Failed',
+        message: 'Failed to level up character',
+        duration: 7000
+      })
+      
       throw error
     }
-  }, [contractLevelUpCharacter, selectedCharacter, refreshData, ownedCharacters, contractCharacterTypes, selectCharacter])
+  }, [contractLevelUpCharacter, selectedCharacter, refreshData, ownedCharacters, contractCharacterTypes, selectCharacter, addToBattleLog, addNotification])
 
   const increaseScore = useCallback((amount: number) => {
     const newScore = score + amount
     setScore(newScore)
     if (newScore > highScore) {
       setHighScore(newScore)
+      addNotification({
+        type: 'achievement',
+        title: 'New High Score!',
+        message: `Amazing! You set a new record: ${newScore}`,
+        duration: 5000
+      })
     }
-  }, [score, highScore])
+  }, [score, highScore, addNotification])
 
   const increaseGold = useCallback((amount: number) => {
     setGold(prev => prev + amount)
-  }, [])
+    if (amount > 100) {
+      addNotification({
+        type: 'success',
+        title: 'Gold Earned',
+        message: `You earned ${amount} gold!`,
+        duration: 3000
+      })
+    }
+  }, [addNotification])
 
   const updatePlayerHealth = useCallback((amount: number) => {
     setPlayerHealth(prev => Math.min(playerMaxHealth, Math.max(0, prev + amount)))
@@ -432,9 +558,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     }
   }, [currentEnemy])
 
-  const addToBattleLog = useCallback((message: string) => {
-    setBattleLog(prev => [...prev, message].slice(-50)) // Keep last 50 messages
-  }, [])
+  
 
   const resetBattleLog = useCallback(() => {
     setBattleLog([])
@@ -456,6 +580,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     setInventory([])
     setBattleLog([])
     setCurrentMatchId(null)
+    setNotifications([])
   }, [])
 
   const levelUp = useCallback(() => {
@@ -468,23 +593,47 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     setExperienceToNextLevel(prev => Math.floor(prev * 1.5))
     
     addToBattleLog(`Level up! You are now level ${newLevel}`)
-  }, [playerLevel, addToBattleLog])
+    
+    addNotification({
+      type: 'achievement',
+      title: 'Level Up!',
+      message: `Congratulations! You reached level ${newLevel}!`,
+      duration: 5000
+    })
+  }, [playerLevel, addToBattleLog, addNotification])
 
   const gainExperience = useCallback((amount: number) => {
     const newExperience = experience + amount
-    if (newExperience >= experienceToNextLevel) {
-      setExperience(newExperience - experienceToNextLevel)
+    const newLevel = Math.floor(newExperience / 100) + 1
+    
+    if (newLevel > playerLevel) {
       levelUp()
-    } else {
-      setExperience(newExperience)
     }
-  }, [experience, experienceToNextLevel, levelUp])
+    
+    setExperience(newExperience)
+    setExperienceToNextLevel(newLevel * 100)
+  }, [experience, playerLevel, levelUp])
 
   const refreshContractData = useCallback(async () => {
     if (address) {
-      await refreshData()
+      try {
+        await refreshData()
+        addNotification({
+          type: 'info',
+          title: 'Data Refreshed',
+          message: 'Contract data has been updated',
+          duration: 2000
+        })
+      } catch (error) {
+        addNotification({
+          type: 'error',
+          title: 'Refresh Failed',
+          message: 'Failed to refresh contract data',
+          duration: 3000
+        })
+      }
     }
-  }, [address, refreshData])
+  }, [address, refreshData, addNotification])
 
   const contextValue: GameState = {
     // Contract Data
@@ -512,6 +661,9 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     battleLog,
     currentMatchId,
     
+    // UI State
+    notifications,
+    
     // Actions
     selectCharacter,
     selectContractCharacter,
@@ -528,7 +680,11 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     resetGame,
     levelUp,
     gainExperience,
-    refreshContractData
+    refreshContractData,
+    
+    // UI Actions
+    addNotification,
+    dismissNotification
   }
 
   return (
