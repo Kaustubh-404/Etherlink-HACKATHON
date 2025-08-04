@@ -12,7 +12,7 @@ import type { Hash } from "viem"
 interface TransactionStatusProps {
   isLoading: boolean
   error: string | null
-  hash: Hash | null
+  hash: Hash | string | null  // Allow both Hash and string types
   title?: string
   description?: string
   onClose?: () => void
@@ -123,14 +123,14 @@ export default function TransactionStatus({
                   <div className="mt-2 flex items-center gap-2 text-xs">
                     <span className="text-muted-foreground">Hash:</span>
                     <code className="bg-muted px-1.5 py-0.5 rounded text-xs">
-                      {Web3Utils.formatAddress(hash)}
+                      {Web3Utils.formatAddress(hash as Hash)}
                     </code>
                     {showExplorerLink && (
                       <Button
                         variant="ghost"
                         size="sm"
                         className="h-auto p-1"
-                        onClick={() => window.open(Web3Utils.getTransactionUrl(hash), '_blank')}
+                        onClick={() => window.open(Web3Utils.getTransactionUrl(hash as string), '_blank')}
                       >
                         <ExternalLink className="h-3 w-3" />
                       </Button>
